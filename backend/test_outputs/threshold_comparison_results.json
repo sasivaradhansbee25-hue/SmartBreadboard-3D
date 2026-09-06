@@ -1,0 +1,142 @@
+{
+  "model": "E:\\CIRCUIT STIMULATOR\\runs\\detect\\backend\\cv\\runs\\breadboard_6class\\weights\\best.pt",
+  "image": "E:\\CIRCUIT STIMULATOR\\backend\\test_assets\\real_breadboard_photo.jpg",
+  "conf_0.20": {
+    "total": 4,
+    "counts": {
+      "resistor": 1,
+      "diode_rectifier": 0,
+      "ic_chip": 0,
+      "wire": 2,
+      "capacitor": 0,
+      "led": 1
+    },
+    "detections": [
+      {
+        "class": "wire",
+        "confidence": 0.966,
+        "bbox": [
+          284,
+          321,
+          442,
+          415
+        ],
+        "center": [
+          363.0,
+          368.0
+        ],
+        "width": 158,
+        "height": 94
+      },
+      {
+        "class": "resistor",
+        "confidence": 0.961,
+        "bbox": [
+          520,
+          260,
+          584,
+          306
+        ],
+        "center": [
+          552.0,
+          283.0
+        ],
+        "width": 64,
+        "height": 46
+      },
+      {
+        "class": "led",
+        "confidence": 0.943,
+        "bbox": [
+          638,
+          440,
+          672,
+          496
+        ],
+        "center": [
+          655.0,
+          468.0
+        ],
+        "width": 34,
+        "height": 56
+      },
+      {
+        "class": "wire",
+        "confidence": 0.311,
+        "bbox": [
+          652,
+          430,
+          864,
+          642
+        ],
+        "center": [
+          758.0,
+          536.0
+        ],
+        "width": 212,
+        "height": 212
+      }
+    ]
+  },
+  "conf_0.45": {
+    "total": 3,
+    "counts": {
+      "resistor": 1,
+      "diode_rectifier": 0,
+      "ic_chip": 0,
+      "wire": 1,
+      "capacitor": 0,
+      "led": 1
+    },
+    "detections": [
+      {
+        "class": "wire",
+        "confidence": 0.966,
+        "bbox": [
+          284,
+          321,
+          442,
+          415
+        ],
+        "center": [
+          363.0,
+          368.0
+        ],
+        "width": 158,
+        "height": 94
+      },
+      {
+        "class": "resistor",
+        "confidence": 0.961,
+        "bbox": [
+          520,
+          260,
+          584,
+          306
+        ],
+        "center": [
+          552.0,
+          283.0
+        ],
+        "width": 64,
+        "height": 46
+      },
+      {
+        "class": "led",
+        "confidence": 0.943,
+        "bbox": [
+          638,
+          440,
+          672,
+          496
+        ],
+        "center": [
+          655.0,
+          468.0
+        ],
+        "width": 34,
+        "height": 56
+      }
+    ]
+  }
+}

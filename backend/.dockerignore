@@ -1,0 +1,13 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.coverage
+htmlcov
+dataset/raw
+dataset/failure_diagnosis
+dataset/processed_6class_hardnegative/vis_samples
+training_runs
+runs
+*.log
