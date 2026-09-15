@@ -8,3 +8,6 @@ dataset_debug/
 __pycache__/
 *.pyc
 .vscode/
+
+venv/
+dist/
