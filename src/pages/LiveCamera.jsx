@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useCircuit } from '../context/CircuitContext';
 import { requestLiveCameraAnalysis } from '../services/analysisService';
+import { API_BASE_URL, WS_BASE_URL } from '../services/api';
 import Breadboard3DCanvas from '../components/Breadboard3DCanvas';
 import ComponentMeasurementCard from '../components/ComponentMeasurementCard';
 import PowerSourcePanel from '../components/PowerSourcePanel';
@@ -69,7 +70,7 @@ export default function LiveCamera() {
     generateNewSession();
 
     // Fetch Laptop LAN IP from backend for QR code generation
-    fetch('/api/lan-ip')
+    fetch(`${API_BASE_URL}/api/lan-ip`)
       .then(res => res.json())
       .then(data => {
         if (data && data.lan_ip) {
@@ -90,9 +91,7 @@ export default function LiveCamera() {
       pcRef.current.close();
     }
 
-    const backendHost = 'smartbreadboard-3d.onrender.com';
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${backendHost}/ws/camera/${sessId}?role=laptop`;
+    const wsUrl = `${WS_BASE_URL}/ws/camera/${sessId}?role=laptop`;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

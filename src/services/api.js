@@ -4,6 +4,9 @@
 
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
 
+// WebSocket base URL derived from API_BASE_URL (http -> ws, https -> wss)
+export const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws');
+
 export async function apiRequest(endpoint, method = 'GET', body = null) {
   try {
     const options = {

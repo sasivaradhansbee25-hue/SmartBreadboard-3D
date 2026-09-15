@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Camera, CameraOff, RefreshCw, Zap, CheckCircle2, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { WS_BASE_URL } from '../services/api';
 
 export default function PhoneCamera() {
   const [sessionId, setSessionId] = useState('');
@@ -69,9 +70,7 @@ export default function PhoneCamera() {
       setStatus('connecting_ws');
 
       // 2. Connect to FastAPI WebSocket signaling server
-      const backendHost = window.location.hostname === 'localhost' ? 'localhost:8000' : `${window.location.hostname}:8000`;
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${backendHost}/ws/camera/${sessionId}?role=phone`;
+      const wsUrl = `${WS_BASE_URL}/ws/camera/${sessionId}?role=phone`;
 
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
