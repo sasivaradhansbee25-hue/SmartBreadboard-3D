@@ -176,10 +176,11 @@ export default function Scanner() {
                 <Sparkles size={14} /> Detections: {totalDetections} Found
               </span>
             ) : (
-              <span className="mock-badge">
+              <span className="code-pill">
                 <ShieldAlert size={14} /> Ready for Detection
               </span>
             )}
+
           </div>
         </div>
       </div>

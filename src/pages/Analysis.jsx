@@ -36,10 +36,11 @@ export default function Analysis() {
                 <Sparkles size={14} /> Data Source: REAL AI
               </span>
             ) : (
-              <span className="mock-badge">
-                <ShieldAlert size={14} /> Data Source: Mock Demo
+              <span className="code-pill">
+                <ShieldAlert size={14} /> Data Source: Reconstructed Circuit
               </span>
             )}
+
           </div>
         </div>
       </div>

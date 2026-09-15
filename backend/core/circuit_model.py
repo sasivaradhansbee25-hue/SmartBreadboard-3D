@@ -7,8 +7,10 @@ and constructs the Circuit Data Model JSON netlist per SPEC.md Section 9.
 import re
 from datetime import datetime
 from cv.breadboard_grid import extract_component_lead_positions
+from cv.value_consensus import extract_value_consensus_from_crop, build_fallback_response
 
 def get_base_node_for_hole(hole_id: str) -> str:
+
     """
     Returns the internal breadboard electrical node name for any tie-point hole:
     - Main grid columns 1-63: Rows A-E -> NODE_COL_c_TOP, Rows F-J -> NODE_COL_c_BOT
@@ -141,17 +143,23 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
         if c_type in ["wire", "jumper"]:
             dsu.union(raw_node1, raw_node2)
 
-        # Lookup resistor value
-        res_info = resistor_val_map.get(c_id, {})
-        det_val_display = res_info.get("formatted", "1 kΩ") if c_type == "resistor" else (
-            "Red" if c_type == "led" else (
-                "100 nF" if c_type == "capacitor" else (
-                    "1N4007" if c_type == "diode_rectifier" else (
-                        "DIP-8" if c_type == "ic_chip" else "Jumper"
-                    )
-                )
-            )
-        )
+        # Multi-pass value consensus extraction
+        crop_b64 = d.get("crop_base64")
+        if crop_b64 and c_type not in ["wire", "jumper"]:
+            val_consensus = extract_value_consensus_from_crop(crop_b64, comp_type=c_type, comp_id=designator)
+        else:
+            if c_type in ["wire", "jumper"]:
+                val_consensus = {
+                    "value": 0.001,
+                    "unit": "Ω",
+                    "displayValue": "Jumper Wire",
+                    "valueSource": "detected",
+                    "confidence": 0.99,
+                    "needsConfirmation": False,
+                    "rawCandidates": []
+                }
+            else:
+                val_consensus = build_fallback_response(c_type, designator, "No crop image available.")
 
         dist1 = d.get("dist1", 2.5)
         dist2 = d.get("dist2", 2.5)
@@ -168,7 +176,14 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
             "confidence": round(conf, 2),
             "mapping_confidence": round(map_conf, 2),
             "uncertain_mapping": is_uncertain,
-            "detected_value": det_val_display,
+            "value": val_consensus.get("value"),
+            "unit": val_consensus.get("unit", "Ω"),
+            "displayValue": val_consensus.get("displayValue", "Not detected"),
+            "detected_value": val_consensus.get("displayValue", "Not detected"),
+            "valueSource": val_consensus.get("valueSource", "user_required"),
+            "val_confidence": val_consensus.get("confidence", 0.0),
+            "needsConfirmation": val_consensus.get("needsConfirmation", True),
+            "rawCandidates": val_consensus.get("rawCandidates", []),
             "user_override_value": None,
             "raw_node1": raw_node1,
             "raw_node2": raw_node2,
@@ -176,6 +191,7 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
             "lead2_distance_px": dist2,
             "connection_warning": is_uncertain
         })
+
         comp_counter += 1
 
     # Map DSU canonical roots to user-friendly Node IDs (N1_VCC, N2_GND, NET1, NET2, etc.)

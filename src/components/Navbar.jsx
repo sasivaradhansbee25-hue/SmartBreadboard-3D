@@ -4,6 +4,7 @@ import {
   Cpu, 
   Home, 
   Scan, 
+  Camera,
   Activity, 
   Box, 
   Calculator, 
@@ -14,6 +15,7 @@ import {
 export default function Navbar() {
   const navItems = [
     { path: '/', label: 'Home', icon: Home },
+    { path: '/live-camera', label: 'Live Camera', icon: Camera },
     { path: '/scanner', label: 'Scanner', icon: Scan },
     { path: '/analysis', label: 'Analysis', icon: Activity },
     { path: '/simulator', label: 'Simulator', icon: Box },
@@ -21,6 +23,7 @@ export default function Navbar() {
     { path: '/results', label: 'Results', icon: FileCheck2 },
     { path: '/learn', label: 'Learn', icon: GraduationCap }
   ];
+
 
   return (
     <header className="navbar-header">
@@ -58,9 +61,6 @@ export default function Navbar() {
           </ul>
         </nav>
 
-        <div>
-          <span className="version-badge">Phase 1 v0.1.0</span>
-        </div>
       </div>
     </header>
   );

@@ -2,8 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { holeTo3DPos } from '../utils/breadboard3DCoords';
+import { useCircuit } from '../context/CircuitContext';
 
 export default function Breadboard3DCanvas({ circuit }) {
+  const { setSelectedComponent, measurements, simulation } = useCircuit();
   const mountRef = useRef(null);
   const controlsRef = useRef(null);
   const cameraRef = useRef(null);
@@ -721,6 +723,67 @@ export default function Breadboard3DCanvas({ circuit }) {
     }
 
     // =========================================================
+    // INDUCTOR
+    // =========================================================
+
+    function createInductor(
+      component,
+      p1,
+      p2
+    ) {
+      const group = new THREE.Group();
+
+      const core = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.35, 0.35, 1.2, 16),
+        new THREE.MeshStandardMaterial({
+          color: 0x334155,
+          roughness: 0.5
+        })
+      );
+      core.rotation.z = Math.PI / 2;
+      group.add(core);
+
+      const coilCurve = new THREE.CatmullRomCurve3(
+        Array.from({ length: 24 }).map((_, i) => {
+          const angle = i * Math.PI * 0.8;
+          const x = -0.55 + i * 0.045;
+          return new THREE.Vector3(x, Math.sin(angle) * 0.42, Math.cos(angle) * 0.42);
+        })
+      );
+
+      const coilMesh = new THREE.Mesh(
+        new THREE.TubeGeometry(coilCurve, 32, 0.06, 8, false),
+        new THREE.MeshStandardMaterial({
+          color: 0xb45309,
+          metalness: 0.8,
+          roughness: 0.3
+        })
+      );
+      group.add(coilMesh);
+
+      const lead1 = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.05, 1.0, 8),
+        metalMaterial
+      );
+      const lead2 = lead1.clone();
+      lead1.position.x = -0.7;
+      lead2.position.x = 0.7;
+
+      group.add(lead1, lead2);
+
+      positionComponent(group, p1, p2);
+
+      core.userData = {
+        name: component.designator || component.id || 'Inductor',
+        type: 'inductor',
+        value: component.user_override_value || component.detected_value || component.value || '10 mH'
+      };
+
+      clickableObjects.push(core);
+      scene.add(group);
+    }
+
+    // =========================================================
     // DIODE
     // =========================================================
 
@@ -1122,13 +1185,15 @@ export default function Breadboard3DCanvas({ circuit }) {
     }
 
     // =========================================================
-    // RENDER ACTUAL CIRCUIT COMPONENTS
+    // RENDER ACTUAL CIRCUIT COMPONENTS & PARTICLE GROUPS
     // =========================================================
 
     const components =
       Array.isArray(circuit?.components)
         ? circuit.components
         : [];
+
+    const particleGroups = [];
 
     console.log(
       '[3D] Circuit:',
@@ -1223,6 +1288,16 @@ export default function Breadboard3DCanvas({ circuit }) {
           );
 
         } else if (
+          type.includes('inductor')
+        ) {
+
+          createInductor(
+            component,
+            p1,
+            p2
+          );
+
+        } else if (
           type.includes('ic')
         ) {
 
@@ -1250,6 +1325,27 @@ export default function Breadboard3DCanvas({ circuit }) {
             component.type
           );
         }
+
+        // Create current flow animation particles for component
+        const compId = component.id || component.designator || `comp-${index}`;
+        const compParticles = [];
+        const particleGeo = new THREE.SphereGeometry(0.08, 8, 8);
+        const particleMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+        
+        for (let i = 0; i < 5; i++) {
+          const pMesh = new THREE.Mesh(particleGeo, particleMat);
+          const initialProgress = i / 5.0;
+          pMesh.position.lerpVectors(p1, p2, initialProgress);
+          scene.add(pMesh);
+          compParticles.push({ mesh: pMesh, progress: initialProgress });
+        }
+
+        particleGroups.push({
+          compId: compId,
+          p1: p1,
+          p2: p2,
+          particles: compParticles
+        });
       }
     );
 
@@ -1298,10 +1394,11 @@ export default function Breadboard3DCanvas({ circuit }) {
         if (
           intersects.length > 0
         ) {
-
-          setSelectedComp(
-            intersects[0].object.userData
-          );
+          const hitData = intersects[0].object.userData;
+          setSelectedComp(hitData);
+          if (setSelectedComponent) {
+            setSelectedComponent(hitData);
+          }
         }
       };
 
@@ -1317,18 +1414,32 @@ export default function Breadboard3DCanvas({ circuit }) {
     let animationFrameId;
 
     const animate = () => {
+      animationFrameId = requestAnimationFrame(animate);
 
-      animationFrameId =
-        requestAnimationFrame(
-          animate
-        );
+      // Animate current particles if simulation is active
+      if (particleGroups && particleGroups.length > 0) {
+        particleGroups.forEach(group => {
+          const compId = group.compId;
+          const m = measurements?.[compId] || {};
+          const current = m.current || 0;
+
+          if (Math.abs(current) > 1e-6 && simulation?.running) {
+            const dir = current > 0 ? 1 : -1;
+            const refCurrent = 0.01; // 10mA reference
+            const speedMultiplier = Math.min(Math.max(Math.abs(current) / refCurrent, 0.2), 3.0);
+
+            group.particles.forEach(p => {
+              p.progress += (0.005 * speedMultiplier * dir);
+              if (p.progress > 1.0) p.progress = 0.0;
+              if (p.progress < 0.0) p.progress = 1.0;
+              p.mesh.position.lerpVectors(group.p1, group.p2, p.progress);
+            });
+          }
+        });
+      }
 
       controls.update();
-
-      renderer.render(
-        scene,
-        camera
-      );
+      renderer.render(scene, camera);
     };
 
     animate();
@@ -1368,6 +1479,17 @@ export default function Breadboard3DCanvas({ circuit }) {
       cancelAnimationFrame(
         animationFrameId
       );
+
+      if (particleGroups && particleGroups.length > 0) {
+        particleGroups.forEach(group => {
+          group.particles.forEach(p => {
+            scene.remove(p.mesh);
+            if (p.mesh.geometry) p.mesh.geometry.dispose();
+            if (p.mesh.material) p.mesh.material.dispose();
+          });
+        });
+      }
+
 
       window.removeEventListener(
         'resize',
@@ -1515,11 +1637,12 @@ export default function Breadboard3DCanvas({ circuit }) {
           }}
         >
 
-          <span className="mock-badge">
+          <span className="code-pill">
             source:{' '}
             {circuit?.source ||
-              'mock'}
+              'real'}
           </span>
+
 
           <span className="code-pill">
             3D Components:{' '}

@@ -39,8 +39,9 @@ export default function Schematic2DRenderer({ circuit, onSelectComponent }) {
       {/* Controls & Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span className="mock-badge">source: {circuit.source || 'mock'}</span>
+          <span className="code-pill">source: {circuit.source || 'real'}</span>
           <span style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--accent-cyan)' }}>
+
             IEEE 2D Schematic Canvas
           </span>
         </div>

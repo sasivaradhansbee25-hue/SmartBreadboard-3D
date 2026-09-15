@@ -1,39 +1,50 @@
 import React, { useState } from 'react';
-import { Box, Play, RotateCcw, ShieldAlert, Zap, Info, Sliders, Eye, FileCode, Sparkles } from 'lucide-react';
+import { Box, ShieldAlert, Eye, FileCode, Sparkles, Wrench } from 'lucide-react';
 import { mockCircuits } from '../data/mockCircuits';
 import { useCircuit } from '../context/CircuitContext';
 import Schematic2DRenderer from '../components/Schematic2DRenderer';
 import Breadboard3DCanvas from '../components/Breadboard3DCanvas';
+import SimulationControls from '../components/SimulationControls';
+import PowerSourcePanel from '../components/PowerSourcePanel';
+import ComponentMeasurementCard from '../components/ComponentMeasurementCard';
+import LiveGraphInspector from '../components/LiveGraphInspector';
+import ValueInputModal from '../components/ValueInputModal';
+import UserCorrectionModal from '../components/UserCorrectionModal';
 
 export default function Simulator() {
-  const { activeCircuit, setActiveCircuit, setMockCircuitData } = useCircuit();
-  const [viewMode, setViewMode] = useState('3d'); // Default to 3D Viewport
-  const [activeProbePin, setActiveProbePin] = useState(null);
-  const [probeReadout, setProbeReadout] = useState({ voltage: '0.00 V', node: 'Ground Rail', current: '0.0 mA' });
-  const [isSimulating, setIsSimulating] = useState(true);
+  const { activeCircuit, setMockCircuitData, loadDemoCircuit, solverStatus, solverError } = useCircuit();
+  const [viewMode, setViewMode] = useState('3d');
+  const [editingComp, setEditingComp] = useState(null);
+  const [correctingComp, setCorrectingComp] = useState(null);
 
   const isReal = activeCircuit.source === 'real';
 
-  const handlePinClick = (pinName, voltageVal, nodeLabel) => {
-    setActiveProbePin(pinName);
-    setProbeReadout({
-      voltage: `${voltageVal} V`,
-      node: nodeLabel,
-      current: voltageVal > 0 ? `${(voltageVal / 1.45).toFixed(1)} mA` : '0.0 mA'
-    });
-  };
-
   return (
     <div>
+      {/* Modals for value overrides & terminal corrections */}
+      {editingComp && (
+        <ValueInputModal
+          component={editingComp}
+          onClose={() => setEditingComp(null)}
+        />
+      )}
+
+      {correctingComp && (
+        <UserCorrectionModal
+          component={correctingComp}
+          onClose={() => setCorrectingComp(null)}
+        />
+      )}
+
       <div className="page-header">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
           <div>
             <h1 className="page-title">
               <Box size={28} style={{ color: 'var(--accent-cyan)' }} />
-              2D / 3D Interactive Breadboard Simulator Workspace
+              2D / 3D Interactive Breadboard Simulator & Electrical Analyzer
             </h1>
             <p className="page-subtitle">
-              Interactive 2D breadboard tie-point grid, 2D IEEE schematic graph, and Three.js 3D WebGL viewport.
+              Reconstruct physical breadboard circuits, solve node-to-node voltages and currents via MNA, and simulate transient waveforms in 3D.
             </p>
           </div>
           <div>
@@ -42,20 +53,38 @@ export default function Simulator() {
                 <Sparkles size={14} /> Data Source: REAL AI
               </span>
             ) : (
-              <span className="mock-badge">
-                <ShieldAlert size={14} /> Data Source: Mock Demo
+              <span className="code-pill">
+                <ShieldAlert size={14} /> Data Source: {activeCircuit.source?.toUpperCase() || 'RECONSTRUCTED'}
               </span>
             )}
+
           </div>
         </div>
       </div>
 
+      {/* Solver Warning / Error Banner if applicable */}
+      {solverStatus === 'ERROR' && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.15)',
+          border: '1px solid #ef4444',
+          borderRadius: '8px',
+          padding: '1rem',
+          color: '#fca5a5',
+          marginBottom: '1rem'
+        }}>
+          <strong>⚠ Circuit cannot be solved</strong>
+          <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem' }}>
+            Reason: {solverError?.message || "Invalid topology, missing ground reference, or singular matrix."}
+          </p>
+        </div>
+      )}
+
       {/* Circuit Selection & Control Toolbar */}
-      <div className="card" style={{ marginBottom: '1.25rem', padding: '0.85rem 1.25rem' }}>
+      <div className="card" style={{ marginBottom: '1rem', padding: '0.85rem 1.25rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-muted)' }}>Target Circuit:</span>
-            
+
             {isReal ? (
               <span className="code-pill" style={{ fontSize: '0.85rem', color: 'var(--accent-emerald)', borderColor: 'var(--accent-emerald)' }}>
                 Real Scanned Netlist ({activeCircuit.components?.length || 0} Components)
@@ -63,26 +92,34 @@ export default function Simulator() {
             ) : (
               <select
                 value={activeCircuit.id}
-                onChange={(e) => setMockCircuitData(mockCircuits.find(c => c.id === e.target.value) || mockCircuits[0])}
+                onChange={(e) => {
+                  if (e.target.value.startsWith('demo_')) {
+                    loadDemoCircuit(e.target.value === 'demo_rlc_transient' ? 1 : 0);
+                  } else {
+                    setMockCircuitData(mockCircuits.find(c => c.id === e.target.value) || mockCircuits[0]);
+                  }
+                }}
                 className="input-field"
                 style={{ width: 'auto', padding: '0.35rem 0.65rem', fontSize: '0.85rem' }}
               >
                 {mockCircuits.map(c => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
+                <option value="demo_dc_led">[DEMO] DC LED & Resistor Circuit</option>
+                <option value="demo_rlc_transient">[DEMO] RLC Transient Circuit</option>
               </select>
             )}
 
             <button
-              onClick={() => setIsSimulating(!isSimulating)}
-              className="btn btn-primary"
+              onClick={() => loadDemoCircuit(0)}
+              className="btn btn-secondary"
               style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem' }}
             >
-              <Play size={14} /> {isSimulating ? 'Simulation Active' : 'Start Simulation'}
+              ⚡ LOAD DEMO CIRCUIT
             </button>
           </div>
 
-          {/* View Mode Toolbar: 2D Breadboard | 2D Schematic | 3D Interactive Three.js */}
+          {/* View Mode Toolbar: 3D Viewport | 2D Schematic */}
           <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <button
               onClick={() => setViewMode('3d')}
@@ -96,18 +133,6 @@ export default function Simulator() {
               }}
             >
               <Eye size={14} /> 3D Three.js Viewport
-            </button>
-            <button
-              onClick={() => setViewMode('breadboard')}
-              className="btn btn-secondary"
-              style={{
-                fontSize: '0.8rem',
-                padding: '0.4rem 0.75rem',
-                borderColor: viewMode === 'breadboard' ? 'var(--accent-cyan)' : 'var(--border-color)',
-                background: viewMode === 'breadboard' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255,255,255,0.03)'
-              }}
-            >
-              <Box size={14} /> 2D Breadboard
             </button>
             <button
               onClick={() => setViewMode('schematic')}
@@ -125,168 +150,27 @@ export default function Simulator() {
         </div>
       </div>
 
-      {/* Main View Area */}
+      {/* Simulation Power Source Setup Panel */}
+      <PowerSourcePanel />
+
+      {/* Simulation Controls Toolbar */}
+      <SimulationControls />
+
+      {/* Main 3D Canvas / 2D Viewport */}
       {viewMode === '3d' ? (
-        <div style={{ marginBottom: '1.5rem' }}>
+        <div style={{ marginBottom: '1.25rem' }}>
           <Breadboard3DCanvas circuit={activeCircuit} />
         </div>
-      ) : viewMode === 'schematic' ? (
-        <div style={{ marginBottom: '1.5rem' }}>
-          <Schematic2DRenderer circuit={activeCircuit} />
-        </div>
       ) : (
-        /* 2D Breadboard Tie-Point Grid Overlay View */
-        <div className="card" style={{ marginBottom: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h3 style={{ fontSize: '1rem', fontWeight: '600' }}>2D Tie-Point Voltage Probe Workspace</h3>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Click tie-point holes to probe node voltage</span>
-          </div>
-
-          <div style={{
-            position: 'relative',
-            background: '#080c14',
-            borderRadius: '8px',
-            padding: '1.5rem',
-            overflowX: 'auto',
-            border: '1px solid var(--border-color)'
-          }}>
-            {/* Visual Tie-Point Grid */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', minWidth: '700px' }}>
-              {/* Power Rail Top */}
-              <div style={{ display: 'flex', gap: '0.4rem', background: 'rgba(239, 68, 68, 0.08)', padding: '0.4rem', borderRadius: '4px', borderLeft: '3px solid #ef4444' }}>
-                <span style={{ fontSize: '0.75rem', width: '60px', color: '#ef4444', fontWeight: '700' }}>VCC (+5V)</span>
-                {[...Array(25)].map((_, i) => (
-                  <button
-                    key={`vcc-${i}`}
-                    onClick={() => handlePinClick(`VCC_${i+1}`, 5.0, 'VCC (+5V Power Rail)')}
-                    style={{
-                      width: '18px',
-                      height: '18px',
-                      borderRadius: '3px',
-                      border: '1px solid #ef4444',
-                      background: activeProbePin === `VCC_${i+1}` ? '#ef4444' : 'rgba(239, 68, 68, 0.2)',
-                      cursor: 'pointer'
-                    }}
-                  />
-                ))}
-              </div>
-
-              {/* Main Grid Rows A-E */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', background: 'rgba(255,255,255,0.02)', padding: '0.5rem', borderRadius: '4px' }}>
-                {['A', 'B', 'C', 'D', 'E'].map(row => (
-                  <div key={row} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                    <span style={{ fontSize: '0.75rem', width: '25px', color: 'var(--text-muted)', fontWeight: '600' }}>{row}</span>
-                    {[...Array(25)].map((_, i) => (
-                      <button
-                        key={`${row}${i+1}`}
-                        onClick={() => handlePinClick(`${row}${i+1}`, (i === 9 || i === 21) ? 2.1 : 0.0, `Node ${row}${i+1}`)}
-                        style={{
-                          width: '18px',
-                          height: '18px',
-                          borderRadius: '3px',
-                          border: '1px solid var(--border-color)',
-                          background: activeProbePin === `${row}${i+1}` ? 'var(--accent-cyan)' : '#0f172a',
-                          cursor: 'pointer'
-                        }}
-                      />
-                    ))}
-                  </div>
-                ))}
-              </div>
-
-              {/* Center Channel Trough Divider */}
-              <div style={{ height: '10px', background: '#1e293b', borderRadius: '2px', textAlign: 'center', fontSize: '0.65rem', color: 'var(--text-muted)', lineHeight: '10px' }}>
-                DIP Center Channel Divider (E-F Isolation)
-              </div>
-
-              {/* Main Grid Rows F-J */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', background: 'rgba(255,255,255,0.02)', padding: '0.5rem', borderRadius: '4px' }}>
-                {['F', 'G', 'H', 'I', 'J'].map(row => (
-                  <div key={row} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                    <span style={{ fontSize: '0.75rem', width: '25px', color: 'var(--text-muted)', fontWeight: '600' }}>{row}</span>
-                    {[...Array(25)].map((_, i) => (
-                      <button
-                        key={`${row}${i+1}`}
-                        onClick={() => handlePinClick(`${row}${i+1}`, 0.0, `Node ${row}${i+1}`)}
-                        style={{
-                          width: '18px',
-                          height: '18px',
-                          borderRadius: '3px',
-                          border: '1px solid var(--border-color)',
-                          background: activeProbePin === `${row}${i+1}` ? 'var(--accent-cyan)' : '#0f172a',
-                          cursor: 'pointer'
-                        }}
-                      />
-                    ))}
-                  </div>
-                ))}
-              </div>
-
-              {/* Power Rail Bottom */}
-              <div style={{ display: 'flex', gap: '0.4rem', background: 'rgba(59, 130, 246, 0.08)', padding: '0.4rem', borderRadius: '4px', borderLeft: '3px solid #3b82f6' }}>
-                <span style={{ fontSize: '0.75rem', width: '60px', color: '#3b82f6', fontWeight: '700' }}>GND (0V)</span>
-                {[...Array(25)].map((_, i) => (
-                  <button
-                    key={`gnd-${i}`}
-                    onClick={() => handlePinClick(`GND_${i+1}`, 0.0, 'GND (0V Ground Rail)')}
-                    style={{
-                      width: '18px',
-                      height: '18px',
-                      borderRadius: '3px',
-                      border: '1px solid #3b82f6',
-                      background: activeProbePin === `GND_${i+1}` ? '#3b82f6' : 'rgba(59, 130, 246, 0.2)',
-                      cursor: 'pointer'
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
+        <div style={{ marginBottom: '1.25rem' }}>
+          <Schematic2DRenderer circuit={activeCircuit} />
         </div>
       )}
 
-      {/* Voltage Probe Readout Drawer */}
-      <div className="card-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        <div className="card">
-          <h3 style={{ fontSize: '1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <Zap size={16} style={{ color: 'var(--accent-amber)' }} /> Voltage Probe Telemetry
-          </h3>
-          
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', fontSize: '0.85rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Probed Hole:</span>
-              <span style={{ fontWeight: '700', color: 'var(--accent-cyan)' }}>{activeProbePin || 'None (Click Grid Pin)'}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Electrical Node:</span>
-              <span>{probeReadout.node}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Node Voltage:</span>
-              <span style={{ fontWeight: '700', fontSize: '1rem', color: 'var(--accent-emerald)', fontFamily: 'var(--font-mono)' }}>{probeReadout.voltage}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Branch Current:</span>
-              <span style={{ fontFamily: 'var(--font-mono)' }}>{probeReadout.current}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="card">
-          <h3 style={{ fontSize: '1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <Info size={16} /> Netlist Node Structure
-          </h3>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            Total Components: <strong style={{ color: '#fff' }}>{activeCircuit.components?.length || 0}</strong> | Total Nodes: <strong style={{ color: '#fff' }}>{activeCircuit.nodes?.length || 0}</strong>
-          </div>
-          <div style={{ marginTop: '0.5rem', maxHeight: '100px', overflowY: 'auto', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', background: 'rgba(0,0,0,0.3)', padding: '0.5rem', borderRadius: '4px' }}>
-            {activeCircuit.components?.map(c => (
-              <div key={c.id}>
-                {c.id} ({c.type}): {c.node1} ({c.hole1}) &lt;-&gt; {c.node2} ({c.hole2})
-              </div>
-            ))}
-          </div>
-        </div>
+      {/* Lower Dashboard: Component Measurement Card & Live Graph */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: '1.25rem', flexWrap: 'wrap' }}>
+        <ComponentMeasurementCard onOpenValueModal={(comp) => setEditingComp(comp)} />
+        <LiveGraphInspector />
       </div>
     </div>
   );

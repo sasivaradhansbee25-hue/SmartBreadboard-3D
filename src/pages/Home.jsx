@@ -13,9 +13,9 @@ import {
   ArrowRight,
   Sparkles
 } from 'lucide-react';
-import { mockCircuits } from '../data/mockCircuits';
 
 export default function Home() {
+
   const features = [
     {
       title: 'Breadboard Scanner',
@@ -108,8 +108,8 @@ export default function Home() {
             <Cpu size={20} />
           </div>
           <div>
-            <div style={{ fontSize: '1.5rem', fontWeight: '700' }}>3 Pre-Loaded</div>
-            <div style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>Mock Circuits Available</div>
+            <div style={{ fontSize: '1.5rem', fontWeight: '700' }}>Live AI</div>
+            <div style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>Webcam 3D Digital Twin</div>
           </div>
         </div>
 
@@ -118,8 +118,8 @@ export default function Home() {
             <ShieldCheck size={20} />
           </div>
           <div>
-            <div style={{ fontSize: '1.5rem', fontWeight: '700' }}>100% Labeled</div>
-            <div style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>Mock Source Integrity</div>
+            <div style={{ fontSize: '1.5rem', fontWeight: '700' }}>MNA Solver</div>
+            <div style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>DC & Transient Analysis</div>
           </div>
         </div>
 
@@ -134,42 +134,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Sample Mock Circuits Section */}
-      <section style={{ marginBottom: '3rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-          <div>
-            <h2 style={{ fontSize: '1.4rem', fontWeight: '700' }}>Featured Sample Circuits</h2>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Pre-packaged circuits ready for analysis and simulation.</p>
-          </div>
-          <Link to="/analysis" className="btn btn-secondary" style={{ fontSize: '0.85rem' }}>
-            View Netlists <ArrowRight size={14} />
-          </Link>
-        </div>
-
-        <div className="card-grid">
-          {mockCircuits.map((circ) => (
-            <div key={circ.id} className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                  <span className="mock-badge">source: {circ.source}</span>
-                  <span className="status-badge-ok">{circ.components.length} Components</span>
-                </div>
-                <h3 style={{ fontSize: '1.15rem', marginBottom: '0.4rem' }}>{circ.name}</h3>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
-                  {circ.description}
-                </p>
-              </div>
-
-              <div style={{ paddingTop: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span className="code-pill">VCC: {circ.power_supply.voltage}V</span>
-                <Link to="/analysis" className="btn btn-primary" style={{ padding: '0.4rem 0.85rem', fontSize: '0.8rem' }}>
-                  Inspect &rarr;
-                </Link>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
 
       {/* Platform Core Modules Grid */}
       <section>

@@ -162,16 +162,6 @@ body {
   border: 1px solid rgba(56, 189, 248, 0.25);
 }
 
-.version-badge {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  padding: 0.25rem 0.6rem;
-  background: rgba(56, 189, 248, 0.1);
-  color: var(--accent-cyan);
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  border-radius: 9999px;
-}
-
 /* Page Containers & Cards */
 .page-header {
   margin-bottom: 2rem;
