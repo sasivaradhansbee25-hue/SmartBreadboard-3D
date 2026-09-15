@@ -8,21 +8,36 @@ import cv2
 import numpy as np
 import base64
 import os
+from pathlib import Path
 
-WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights")
+# Resolve base backend directory relative to this file (backend/cv/yolo_detector.py -> backend)
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Model path resolution order:
+# 1. YOLO_MODEL_PATH environment variable (if provided and file exists)
+# 2. backend/models/best.pt (Primary production model)
+# 3. backend/cv/weights/best.pt (Secondary internal weights)
+# 4. backend/cv/weights/yolov8n_breadboard.pt (Fallback model)
+
 MODEL_PATH_ENV = os.environ.get("YOLO_MODEL_PATH")
-MODEL_PATH_INTERNAL_BEST = os.path.join(WEIGHTS_DIR, "best.pt")
-MODEL_PATH_PROD_RUNS = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "runs", "detect", "backend", "cv", "runs", "breadboard_6class", "weights", "best.pt"))
-MODEL_PATH_FALLBACK_PT = os.path.join(WEIGHTS_DIR, "yolov8n_breadboard.pt")
+MODEL_PATH_PROD = BASE_DIR / "models" / "best.pt"
+MODEL_PATH_CV_BEST = BASE_DIR / "cv" / "weights" / "best.pt"
+MODEL_PATH_FALLBACK = BASE_DIR / "cv" / "weights" / "yolov8n_breadboard.pt"
 
 if MODEL_PATH_ENV and os.path.exists(MODEL_PATH_ENV):
-    MODEL_PATH_PT = MODEL_PATH_ENV
-elif os.path.exists(MODEL_PATH_INTERNAL_BEST):
-    MODEL_PATH_PT = MODEL_PATH_INTERNAL_BEST
-elif os.path.exists(MODEL_PATH_PROD_RUNS):
-    MODEL_PATH_PT = MODEL_PATH_PROD_RUNS
+    MODEL_PATH_PT = os.path.abspath(MODEL_PATH_ENV)
+    MODEL_SOURCE_LOG = f"YOLO_MODEL_PATH env var ({MODEL_PATH_ENV})"
+elif MODEL_PATH_PROD.exists():
+    MODEL_PATH_PT = str(MODEL_PATH_PROD)
+    MODEL_SOURCE_LOG = "backend/models/best.pt"
+elif MODEL_PATH_CV_BEST.exists():
+    MODEL_PATH_PT = str(MODEL_PATH_CV_BEST)
+    MODEL_SOURCE_LOG = "backend/cv/weights/best.pt"
 else:
-    MODEL_PATH_PT = MODEL_PATH_FALLBACK_PT
+    MODEL_PATH_PT = str(MODEL_PATH_FALLBACK)
+    MODEL_SOURCE_LOG = "backend/cv/weights/yolov8n_breadboard.pt"
+
+print(f"[YOLO Detector] Selected model path: {MODEL_PATH_PT} (Source: {MODEL_SOURCE_LOG})")
 
 MODEL_PATH_ONNX = None  # Use verified PyTorch YOLOv8n best.pt model directly
 _YOLO_MODEL_CACHE = None
