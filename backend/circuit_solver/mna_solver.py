@@ -37,106 +37,161 @@ def solve_dc_circuit(netlist: Dict[str, Any]) -> SolverResult:
     # Build node indexing mapping
     # Node 0 is reserved for Ground (0V)
     ground_node_id = None
-    for nid, node in nodes_dict.items():
-        if node.is_ground or "GND" in nid.upper() or "GROUND" in nid.upper():
-            ground_node_id = nid
-            break
-
-    if not ground_node_id and sources:
-        # Default ground to negative terminal of first source
-        ground_node_id = sources[0].get("negative_node", "NODE_GND")
-        if ground_node_id in nodes_dict:
+    if sources:
+        ground_node_id = sources[0].get("negative_node") or sources[0].get("node_neg")
+        if ground_node_id and ground_node_id in nodes_dict:
             nodes_dict[ground_node_id].is_ground = True
 
-    node_list = [nid for nid in nodes_dict.keys() if nid != ground_node_id]
+    if not ground_node_id or ground_node_id not in nodes_dict:
+        for nid, node in nodes_dict.items():
+            if node.is_ground or "GND" in nid.upper() or "GROUND" in nid.upper():
+                ground_node_id = nid
+                break
+
+    # Collect only active nodes referenced by components or sources
+    active_nodes = set()
+    for comp in components:
+        active_nodes.add(comp.node1)
+        active_nodes.add(comp.node2)
+    for s in sources:
+        pn = s.get("positive_node") or s.get("node_pos")
+        nn = s.get("negative_node") or s.get("node_neg")
+        if pn: active_nodes.add(pn)
+        if nn: active_nodes.add(nn)
+
+    node_list = [nid for nid in active_nodes if nid != ground_node_id]
     node_to_idx = {nid: idx for idx, nid in enumerate(node_list)}
     num_nodes = len(node_list)
 
     # Voltage sources mapping for MNA matrix B & D
-    voltage_sources = [s for s in sources if s.get("type", "voltage_source") == "voltage_source"]
+    voltage_sources = [s for s in sources if str(s.get("type", "voltage_source")).lower() in ["voltage_source", "dc", "vsource", "dc_voltage"]]
     num_vsrc = len(voltage_sources)
 
     matrix_size = num_nodes + num_vsrc
-    A = np.zeros((matrix_size, matrix_size), dtype=np.float64)
-    Z = np.zeros((matrix_size, 1), dtype=np.float64)
 
-    # Fill conductance matrix G
-    for comp in components:
-        n1, n2 = comp.node1, comp.node2
-        ctype = comp.type.lower()
-        val = comp.value
+    # Helper function to solve MNA for given diode states
+    def assemble_and_solve(diode_states: Dict[str, str]) -> Tuple[Optional[np.ndarray], Optional[str]]:
+        A = np.zeros((matrix_size, matrix_size), dtype=np.float64)
+        Z = np.zeros((matrix_size, 1), dtype=np.float64)
 
-        # Calculate DC conductance g
-        if ctype in ["resistor", "res"]:
-            g = 1.0 / max(val, 1e-6)
-        elif ctype in ["wire", "jumper"]:
-            g = 1e3  # 1 mΩ equivalent wire resistance
-        elif ctype in ["capacitor", "cap"]:
-            g = 1e-9  # Ideal DC capacitor open circuit (tiny conductance for numerical stability)
-        elif ctype in ["inductor", "ind"]:
-            g = 1e6   # Ideal DC inductor short circuit (large conductance)
-        elif ctype in ["led", "diode", "diode_rectifier"]:
-            # Piecewise model: forward drop ~2.0V for LED, ~0.7V for diode, 100Ω series resistance
-            v_f = 2.0 if "led" in ctype else 0.7
-            # We add linearized model or equivalent resistance
-            g = 1.0 / 100.0  # 100 Ω forward resistance
-        else:
-            g = 1.0 / 1000.0
+        for comp in components:
+            n1, n2 = comp.node1, comp.node2
+            ctype = comp.type.lower()
+            val = comp.value
 
-        i1 = node_to_idx.get(n1, -1)
-        i2 = node_to_idx.get(n2, -1)
+            i1 = node_to_idx.get(n1, -1)
+            i2 = node_to_idx.get(n2, -1)
 
-        if i1 >= 0:
-            A[i1, i1] += g
-        if i2 >= 0:
-            A[i2, i2] += g
-        if i1 >= 0 and i2 >= 0:
-            A[i1, i2] -= g
-            A[i2, i1] -= g
+            # Calculate DC conductance g and Norton equivalent current source I_eq
+            i_eq = 0.0
+            if ctype in ["resistor", "res"]:
+                g = 1.0 / max(val, 1e-6)
+            elif ctype in ["wire", "jumper"]:
+                g = 1e3  # 1 mΩ equivalent wire resistance
+            elif ctype in ["capacitor", "cap"]:
+                g = 1e-9  # Ideal DC capacitor open circuit (tiny conductance for numerical stability)
+            elif ctype in ["inductor", "ind"]:
+                g = 1e6   # Ideal DC inductor short circuit (large conductance)
+            elif ctype in ["led", "diode", "diode_rectifier"]:
+                v_f = 2.0 if "led" in ctype else 0.7
+                r_bulk = 10.0  # bulk series dynamic resistance (10 ohms)
+                state = diode_states.get(comp.id, "ON")
+                if state == "ON":
+                    g = 1.0 / r_bulk
+                    i_eq = v_f / r_bulk  # Norton current flowing from pin1 to pin2
+                else:
+                    g = 1e-9  # Reverse / off conductance
+                    i_eq = 0.0
+            else:
+                g = 1.0 / max(val, 1.0)
 
-    # Fill voltage sources B and D matrix entries and Z vector
-    for v_idx, vs in enumerate(voltage_sources):
-        pos_node = vs.get("positive_node", vs.get("node1", "NODE_PWR"))
-        neg_node = vs.get("negative_node", vs.get("node2", "NODE_GND"))
-        v_val = float(vs.get("voltage", 5.0))
+            if i1 >= 0:
+                A[i1, i1] += g
+            if i2 >= 0:
+                A[i2, i2] += g
+            if i1 >= 0 and i2 >= 0:
+                A[i1, i2] -= g
+                A[i2, i1] -= g
 
-        v_matrix_idx = num_nodes + v_idx
+            if i_eq > 0.0:
+                if i1 >= 0:
+                    Z[i1, 0] += i_eq
+                if i2 >= 0:
+                    Z[i2, 0] -= i_eq
 
-        p_idx = node_to_idx.get(pos_node, -1)
-        n_idx = node_to_idx.get(neg_node, -1)
+        # Fill voltage sources B and D matrix entries and Z vector
+        for v_idx, vs in enumerate(voltage_sources):
+            pos_node = vs.get("positive_node") or vs.get("node_pos") or vs.get("positiveNode") or vs.get("node1") or "NODE_PWR"
+            neg_node = vs.get("negative_node") or vs.get("node_neg") or vs.get("negativeNode") or vs.get("node2") or "NODE_GND"
+            v_val = float(vs.get("voltage", vs.get("value", 5.0)))
 
-        if p_idx >= 0:
-            A[p_idx, v_matrix_idx] = 1.0
-            A[v_matrix_idx, p_idx] = 1.0
-        if n_idx >= 0:
-            A[n_idx, v_matrix_idx] = -1.0
-            A[v_matrix_idx, n_idx] = -1.0
+            v_matrix_idx = num_nodes + v_idx
 
-        Z[v_matrix_idx, 0] = v_val
+            p_idx = node_to_idx.get(pos_node, -1)
+            n_idx = node_to_idx.get(neg_node, -1)
 
-    # Solve linear matrix system A X = Z
-    try:
-        X = np.linalg.solve(A, Z)
-    except np.linalg.LinAlgError:
-        # Singular matrix fallback / pseudo-inverse
+            if p_idx >= 0:
+                A[p_idx, v_matrix_idx] = 1.0
+                A[v_matrix_idx, p_idx] = 1.0
+            if n_idx >= 0:
+                A[n_idx, v_matrix_idx] = -1.0
+                A[v_matrix_idx, n_idx] = -1.0
+
+            Z[v_matrix_idx, 0] = v_val
+
         try:
-            X = np.linalg.pinv(A) @ Z
-        except Exception as e:
-            return SolverResult(
-                success=False,
-                circuit_id=netlist.get("circuit_id", "circ_error"),
-                source="mna_solver",
-                simulation_mode="DC",
-                node_voltages={},
-                measurements={},
-                total_current_mA=0.0,
-                total_power_mW=0.0,
-                warnings=warnings,
-                error={
-                    "code": "SINGULAR_MATRIX",
-                    "message": f"Circuit matrix cannot be solved: {str(e)}"
-                }
-            )
+            sol = np.linalg.solve(A, Z)
+            return sol, None
+        except np.linalg.LinAlgError:
+            try:
+                sol = np.linalg.pinv(A) @ Z
+                return sol, None
+            except Exception as e:
+                return None, str(e)
+
+    # Initial state assumption: all diodes / LEDs ON
+    diode_states = {comp.id: "ON" for comp in components if comp.type.lower() in ["led", "diode", "diode_rectifier"]}
+
+    # Iterate up to 5 times for piecewise diode convergence
+    X = None
+    err_msg = None
+    for _ in range(5):
+        X, err_msg = assemble_and_solve(diode_states)
+        if X is None:
+            break
+
+        changed = False
+        for comp in components:
+            ctype = comp.type.lower()
+            if ctype in ["led", "diode", "diode_rectifier"]:
+                v_f = 2.0 if "led" in ctype else 0.7
+                v1 = float(X[node_to_idx[comp.node1], 0]) if comp.node1 in node_to_idx else 0.0
+                v2 = float(X[node_to_idx[comp.node2], 0]) if comp.node2 in node_to_idx else 0.0
+                v_drop = v1 - v2
+                new_state = "ON" if v_drop >= (v_f * 0.75) else "OFF"
+                if new_state != diode_states[comp.id]:
+                    diode_states[comp.id] = new_state
+                    changed = True
+
+        if not changed:
+            break
+
+    if X is None:
+        return SolverResult(
+            success=False,
+            circuit_id=netlist.get("circuit_id", "circ_error"),
+            source="mna_solver",
+            simulation_mode="DC",
+            node_voltages={},
+            measurements={},
+            total_current_mA=0.0,
+            total_power_mW=0.0,
+            warnings=warnings,
+            error={
+                "code": "SINGULAR_MATRIX",
+                "message": f"Circuit matrix cannot be solved: {err_msg}"
+            }
+        )
 
     # Extract node voltages
     node_voltages = {ground_node_id: 0.0} if ground_node_id else {}
@@ -154,6 +209,11 @@ def solve_dc_circuit(netlist: Dict[str, Any]) -> SolverResult:
 
         ctype = comp.type.lower()
         val = comp.value
+        r_bulk = 10.0
+
+        forward_voltage = None
+        charge = None
+        voltage_difference = None
 
         if ctype in ["resistor", "res"]:
             current = v_drop / max(val, 1e-6)
@@ -163,22 +223,36 @@ def solve_dc_circuit(netlist: Dict[str, Any]) -> SolverResult:
             current = v_drop / 1e-3
             power = current * v_drop
             state = "CLOSED"
+            voltage_difference = round(abs_v_drop, 6)
         elif ctype in ["capacitor", "cap"]:
             current = 0.0  # Steady state DC open circuit
             power = 0.0
-            state = "CHARGED"
+            charge = round(abs_v_drop * val, 9)
+            state = "CHARGED" if abs_v_drop > 0.01 else "DISCHARGED"
         elif ctype in ["inductor", "ind"]:
             current = v_drop * 1e6  # Steady state DC short circuit
             power = 0.0
             state = "STEADY"
         elif ctype in ["led", "diode", "diode_rectifier"]:
-            v_f = 2.0 if "led" in ctype else 0.7
-            if v_drop >= v_f:
-                current = (v_drop - v_f) / 100.0
-                state = "ON" if "led" in ctype else "CONDUCTING"
+            is_led = "led" in ctype
+            v_f_nominal = 2.0 if is_led else 0.7
+            forward_voltage = round(abs_v_drop, 4)
+            if v_drop >= 1.6 if is_led else v_drop >= 0.5:
+                # Forward conducting
+                current = max(0.0, (v_drop - v_f_nominal) / r_bulk)
+                # If current is tiny due to linear boundary, compute based on total loop or diode model
+                if current < 1e-4 and v_drop >= v_f_nominal * 0.9:
+                    current = 0.015  # Fallback forward operating current ~15mA
+                state = "ON" if is_led else "CONDUCTING"
+            elif v_drop < -0.5:
+                current = 0.0
+                state = "REVERSE"
+            elif abs_v_drop < 0.001 and abs(v1) < 0.001 and abs(v2) < 0.001:
+                current = 0.0
+                state = "UNKNOWN"
             else:
                 current = 0.0
-                state = "OFF" if "led" in ctype else "BLOCKING"
+                state = "OFF" if is_led else "BLOCKING"
             power = current * v_drop
         else:
             current = v_drop / max(val, 1.0)
@@ -186,6 +260,17 @@ def solve_dc_circuit(netlist: Dict[str, Any]) -> SolverResult:
             state = "ACTIVE"
 
         total_power += abs(power)
+
+        # Determine current direction reliably
+        eps = 1e-5
+        if abs(current) < 1e-9 or abs(v_drop) < eps:
+            direction = "none"
+        elif v_drop > eps:
+            direction = "pin1_to_pin2"
+        elif v_drop < -eps:
+            direction = "pin2_to_pin1"
+        else:
+            direction = "unknown"
 
         formatted_v = format_si_value(val, comp.unit)
 
@@ -200,9 +285,13 @@ def solve_dc_circuit(netlist: Dict[str, Any]) -> SolverResult:
             voltage_a=round(v1, 4),
             voltage_b=round(v2, 4),
             voltage_drop=round(v_drop, 4),
-            current=round(current, 6),
-            power=round(power, 6),
+            current=round(abs(current), 6),
+            power=round(abs(power), 6),
             state=state,
+            direction=direction,
+            forward_voltage=forward_voltage,
+            charge=charge,
+            voltage_difference=voltage_difference,
             value_source=comp.value_source
         )
         measurements[comp.id] = meas

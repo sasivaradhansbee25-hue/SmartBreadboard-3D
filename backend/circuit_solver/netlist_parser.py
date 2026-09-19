@@ -26,26 +26,34 @@ def parse_circuit_netlist(netlist: Dict[str, Any]) -> Tuple[List[Component], Lis
             "voltage": float(ps.get("voltage", 5.0))
         }]
     elif raw_sources is None:
-        raw_sources = [{
-            "id": "V1",
-            "type": "voltage_source",
-            "positive_node": "NODE_PWR",
-            "negative_node": "NODE_GND",
-            "voltage": 5.0
-        }]
+        raw_sources = []
 
     nodes_dict: Dict[str, Node] = {}
     for n in raw_nodes:
-        nid = str(n.get("id", ""))
-        lbl = str(n.get("label", nid))
+        if isinstance(n, dict):
+            nid = str(n.get("id", ""))
+            lbl = str(n.get("label", nid))
+        else:
+            nid = str(n)
+            lbl = str(n)
+        if not nid:
+            continue
         is_gnd = "GND" in nid.upper() or "GROUND" in nid.upper()
         is_pwr = "PWR" in nid.upper() or "VCC" in nid.upper()
         nodes_dict[nid] = Node(id=nid, label=lbl, is_ground=is_gnd, is_power=is_pwr)
 
-    # Ensure NODE_GND and NODE_PWR exist
-    if "NODE_GND" not in nodes_dict:
+    # Register nodes from sources
+    for s in raw_sources:
+        pn = s.get("positive_node") or s.get("node_pos")
+        nn = s.get("negative_node") or s.get("node_neg")
+        if pn and pn not in nodes_dict:
+            nodes_dict[pn] = Node(id=pn, label=pn, is_power=True)
+        if nn and nn not in nodes_dict:
+            nodes_dict[nn] = Node(id=nn, label=nn, is_ground=True)
+
+    # Ensure default fallback nodes exist only if needed
+    if not nodes_dict:
         nodes_dict["NODE_GND"] = Node(id="NODE_GND", label="Ground (0V)", is_ground=True)
-    if "NODE_PWR" not in nodes_dict:
         nodes_dict["NODE_PWR"] = Node(id="NODE_PWR", label="VCC (+5V)", is_power=True)
 
     parsed_components: List[Component] = []
@@ -57,6 +65,11 @@ def parse_circuit_netlist(netlist: Dict[str, Any]) -> Tuple[List[Component], Lis
         # Extract node connections
         n1 = str(rc.get("node1") or rc.get("hole1") or rc.get("node1_hole") or rc.get("start_hole") or "NODE_PWR")
         n2 = str(rc.get("node2") or rc.get("hole2") or rc.get("node2_hole") or rc.get("end_hole") or "NODE_GND")
+
+        if n1 not in nodes_dict:
+            nodes_dict[n1] = Node(id=n1, label=n1)
+        if n2 not in nodes_dict:
+            nodes_dict[n2] = Node(id=n2, label=n2)
 
         # Value parsing
         user_val = rc.get("user_override_value")

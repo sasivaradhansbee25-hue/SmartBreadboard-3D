@@ -42,6 +42,7 @@ export async function requestEquivalentCapacitance(circuit, isParallel = true) {
 }
 
 export async function requestLiveCameraAnalysis(imageBase64, previousState = null, powerSource = null) {
+  const startTime = performance ? performance.now() : Date.now();
   const apiRes = await apiRequest('/camera/analyze', 'POST', {
     image_base64: imageBase64,
     previous_state: previousState,
@@ -49,31 +50,59 @@ export async function requestLiveCameraAnalysis(imageBase64, previousState = nul
     power_source: powerSource
   });
 
+  const endTime = performance ? performance.now() : Date.now();
+  const latencyMs = Math.round(endTime - startTime);
+
   if (apiRes && apiRes.status === 'success') {
-    return apiRes;
+    return {
+      ...apiRes,
+      latency_ms: latencyMs
+    };
   }
   return null;
 }
 
 export async function requestDcSimulation(circuit) {
-
   if (!circuit) return null;
 
-  const apiRes = await apiRequest('/circuit/analyze', 'POST', {
-    netlist: {
-      circuit_id: circuit.id,
-      components: circuit.components || [],
-      power_sources: circuit.power_sources || [],
-      nodes: circuit.nodes || []
-    }
-  });
+  try {
+    const apiRes = await apiRequest('/circuit/analyze', 'POST', {
+      netlist: {
+        circuit_id: circuit.id,
+        components: circuit.components || [],
+        power_sources: circuit.power_sources || [],
+        nodes: circuit.nodes || [],
+        nets: circuit.nets || [],
+        wires: circuit.wires || [],
+        validity: circuit.validity,
+        solver_status: circuit.solver_status,
+        solver_reason: circuit.solver_reason
+      }
+    });
 
-  if (apiRes && apiRes.status === 'SOLVED') {
-    return apiRes;
+    if (apiRes && (apiRes.status || apiRes.solver_status)) {
+      return apiRes;
+    }
+  } catch (err) {
+    console.warn("[analysisService] Backend solver request failed:", err);
   }
 
-  // Local calculation fallback if backend solver is offline
-  return generateLocalDcAnalysis(circuit);
+  // Only fallback for mock demonstration circuits when backend is completely offline
+  if (circuit.source === 'mock' || !circuit.source) {
+    return generateLocalDcAnalysis(circuit);
+  }
+
+  return {
+    success: false,
+    status: 'NOT_RUN',
+    solver_status: 'NOT_RUN',
+    reason: 'Backend solver connection offline and real circuit requires active backend.',
+    error: { code: 'BACKEND_OFFLINE', message: 'Backend solver unavailable' },
+    components: [],
+    nodes: [],
+    node_voltages: {},
+    measurements: {}
+  };
 }
 
 export async function requestTransientSimulation(circuit, duration = 0.01, timestep = 0.0001) {

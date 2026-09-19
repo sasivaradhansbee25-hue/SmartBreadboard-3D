@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
 import { useCircuit } from '../context/CircuitContext';
+import { parseComponentValue } from '../utils/valueParser';
 
-export default function ValueInputModal({ component, onClose }) {
-  const { updateComponentValue } = useCircuit();
+export default function ValueInputModal({ component, onClose, onConfirmOverride }) {
+  const { applyDigitalComponentValue } = useCircuit();
   const rawCandidates = component?.rawCandidates || [];
   
   const [selectedCandidate, setSelectedCandidate] = useState(
     rawCandidates.length > 0 ? 0 : null
   );
-  const [val, setVal] = useState(component?.value || (rawCandidates[0]?.value || '1000'));
+  const [val, setVal] = useState(component?.user_override_value || component?.displayValue || component?.value || (rawCandidates[0]?.value || '1000'));
   const [unit, setUnit] = useState(component?.unit || (rawCandidates[0]?.unit || 'Ω'));
+  const [errorMsg, setErrorMsg] = useState(null);
 
   if (!component) return null;
 
@@ -19,15 +21,26 @@ export default function ValueInputModal({ component, onClose }) {
     if (cand) {
       setVal(cand.value);
       setUnit(cand.unit || 'Ω');
+      setErrorMsg(null);
     }
   };
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (component) {
-      updateComponentValue(component.id || component.designator, val, unit);
+    if (!component) return;
+
+    const parsed = parseComponentValue(val, component.type || 'resistor');
+    if (!parsed.isValid) {
+      setErrorMsg(parsed.error || 'Invalid component value');
+      return;
     }
-    onClose();
+
+    if (onConfirmOverride) {
+      onConfirmOverride(component, val, unit, parsed.formatted);
+    } else {
+      applyDigitalComponentValue(component.id || component.designator, val, unit);
+      onClose();
+    }
   };
 
   return (
@@ -125,23 +138,23 @@ export default function ValueInputModal({ component, onClose }) {
         {/* Manual Input Form */}
         <form onSubmit={handleSubmit}>
           <label style={{ display: 'block', fontSize: '0.85rem', color: '#cbd5e1', fontWeight: 600, marginBottom: '0.4rem' }}>
-            {rawCandidates.length > 0 ? 'Or enter value manually:' : 'Enter numeric value:'}
+            {rawCandidates.length > 0 ? 'Or enter value (e.g. 2.2k, 470, 10uF):' : 'Enter value (e.g. 2.2k, 470, 10uF):'}
           </label>
-          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
             <input
-              type="number"
-              step="any"
+              type="text"
               value={val}
               onChange={(e) => {
                 setSelectedCandidate(null);
                 setVal(e.target.value);
+                setErrorMsg(null);
               }}
-              placeholder="e.g. 1000"
+              placeholder="e.g. 2.2k, 1000, 10uF"
               required
               style={{
                 flex: 1,
                 background: '#0f172a',
-                border: '1px solid #334155',
+                border: errorMsg ? '1px solid #ef4444' : '1px solid #334155',
                 color: '#fff',
                 borderRadius: '6px',
                 padding: '0.6rem 0.8rem',
@@ -169,6 +182,12 @@ export default function ValueInputModal({ component, onClose }) {
               <option value="V">V</option>
             </select>
           </div>
+
+          {errorMsg && (
+            <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid #ef4444', borderRadius: '6px', padding: '0.45rem 0.75rem', color: '#fca5a5', fontSize: '0.8rem', marginBottom: '1rem' }}>
+              ⚠️ {errorMsg}
+            </div>
+          )}
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
             <button

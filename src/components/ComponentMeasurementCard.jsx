@@ -2,7 +2,7 @@ import React from 'react';
 import { useCircuit } from '../context/CircuitContext';
 
 export default function ComponentMeasurementCard({ onOpenValueModal, onOpenCorrectionModal }) {
-  const { selectedComponent, measurements, activeCircuit, simulationSource } = useCircuit();
+  const { selectedComponent, measurements, activeCircuit, simulationSource, simulationResult, solverStatus, solverError } = useCircuit();
 
   if (!selectedComponent) {
     return (
@@ -26,16 +26,22 @@ export default function ComponentMeasurementCard({ onOpenValueModal, onOpenCorre
   // Retrieve solver measurement if available
   const m = measurements[compId] || measurements[selectedComponent.id] || {};
   const compObj = activeCircuit?.components?.find(c => (c.id === compId || c.designator === compId)) || selectedComponent;
+  const elec = selectedComponent.electrical || null;
+
+  const isSolved = (solverStatus === 'SOLVED' || simulationResult?.solver_status === 'SOLVED');
 
   const valDisplay = compObj?.displayValue || compObj?.user_override_value || compObj?.formatted_value || compObj?.detected_value || selectedComponent.value || '1 kΩ';
   const valueSource = compObj?.valueSource || selectedComponent.valueSource || 'detected';
   const needsConf = compObj?.needsConfirmation || false;
-  const confidenceVal = compObj?.val_confidence || compObj?.confidence || 0.9;
 
-  const voltageDrop = m.voltageDrop !== undefined ? `${m.voltageDrop.toFixed(2)} V` : '0.00 V';
-  const currentDisplay = m.current !== undefined ? `${(m.current * 1000).toFixed(2)} mA` : '0.00 mA';
-  const powerMw = m.power !== undefined ? m.power * 1000 : 0;
-  const powerDisplay = `${powerMw.toFixed(2)} mW`;
+  const rawV = (elec && elec.voltage !== undefined) ? elec.voltage : (m.voltage !== undefined ? m.voltage : (m.voltageDrop !== undefined ? Math.abs(m.voltageDrop) : undefined));
+  const rawI = (elec && elec.current !== undefined) ? elec.current : m.current;
+  const rawP = (elec && elec.power !== undefined) ? elec.power : m.power;
+
+  const voltageDrop = isSolved && rawV !== undefined ? `${rawV.toFixed(2)} V` : (isSolved ? 'N/A' : '—');
+  const currentDisplay = isSolved && rawI !== undefined ? `${(rawI * 1000).toFixed(2)} mA` : (isSolved ? 'N/A' : '—');
+  const powerMw = isSolved && rawP !== undefined ? rawP * 1000 : 0;
+  const powerDisplay = isSolved && rawP !== undefined ? `${powerMw.toFixed(2)} mW` : (isSolved ? 'N/A' : '—');
 
   const termA = m.terminalVoltages?.A !== undefined ? `${m.terminalVoltages.A.toFixed(2)} V` : (m.voltage_a !== undefined ? `${m.voltage_a.toFixed(2)} V` : '0.00 V');
   const termB = m.terminalVoltages?.B !== undefined ? `${m.terminalVoltages.B.toFixed(2)} V` : (m.voltage_b !== undefined ? `${m.voltage_b.toFixed(2)} V` : '0.00 V');
@@ -102,6 +108,25 @@ export default function ComponentMeasurementCard({ onOpenValueModal, onOpenCorre
           </button>
         </div>
       </div>
+
+      {/* Solver Status Banner when NOT_RUN or ERROR */}
+      {!isSolved && (
+        <div style={{
+          background: solverStatus === 'NOT_RUN' || simulationResult?.solver_status === 'NOT_RUN' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+          border: `1px solid ${solverStatus === 'NOT_RUN' || simulationResult?.solver_status === 'NOT_RUN' ? '#f59e0b' : '#ef4444'}`,
+          borderRadius: '6px',
+          padding: '0.5rem 0.75rem',
+          marginBottom: '0.75rem',
+          fontSize: '0.8rem',
+          color: solverStatus === 'NOT_RUN' || simulationResult?.solver_status === 'NOT_RUN' ? '#fef08a' : '#fca5a5'
+        }}>
+          {solverStatus === 'NOT_RUN' || simulationResult?.solver_status === 'NOT_RUN' ? (
+            <span>⏸ <strong>Simulation: NOT RUN</strong> — {simulationResult?.reason || solverError?.message || 'No power source detected in photograph. Add simulated power source for electrical analysis.'}</span>
+          ) : (
+            <span>⚠️ <strong>Simulation: ERROR</strong> — {solverError?.message || simulationResult?.reason || 'Circuit solver error.'}</span>
+          )}
+        </div>
+      )}
 
       {/* Power Sanity Warning */}
       {isHighPower && (

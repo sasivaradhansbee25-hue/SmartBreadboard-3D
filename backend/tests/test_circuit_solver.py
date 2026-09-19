@@ -3,7 +3,12 @@ SmartBreadboard 3D — Circuit Solver & Power Source Injection Unit Tests
 Tests DC operating point, transient analysis, value parser, source injection, polarity reversal, and error validation.
 """
 
+import sys
+import os
 import math
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from circuit_solver.dc_solver import run_dc_analysis
 from circuit_solver.transient_solver import run_transient_analysis
 from cv.value_parser import parse_component_value, format_si_value

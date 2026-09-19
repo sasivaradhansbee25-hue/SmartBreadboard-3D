@@ -2,14 +2,17 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useCircuit } from '../context/CircuitContext';
 import { requestLiveCameraAnalysis } from '../services/analysisService';
-import { API_BASE_URL, WS_BASE_URL } from '../services/api';
+import { API_BASE_URL, FRONTEND_BASE_URL, WS_BASE_URL } from '../services/api';
 import Breadboard3DCanvas from '../components/Breadboard3DCanvas';
 import ComponentMeasurementCard from '../components/ComponentMeasurementCard';
 import PowerSourcePanel from '../components/PowerSourcePanel';
 import SimulationControls from '../components/SimulationControls';
 import ValueInputModal from '../components/ValueInputModal';
 import UserCorrectionModal from '../components/UserCorrectionModal';
-import { Camera, CameraOff, RefreshCw, Zap, Layers, Smartphone, Monitor, QrCode, Wifi, CheckCircle2 } from 'lucide-react';
+import ARCameraOverlay from '../components/ARCameraOverlay';
+import DigitalChangeConfirmModal from '../components/DigitalChangeConfirmModal';
+import WhatIfComparisonModal from '../components/WhatIfComparisonModal';
+import { Camera, CameraOff, RefreshCw, Zap, Layers, Smartphone, Monitor, QrCode, Wifi, CheckCircle2, Download, Upload, Sparkles } from 'lucide-react';
 
 export default function LiveCamera() {
   const {
@@ -18,7 +21,21 @@ export default function LiveCamera() {
     measurements,
     runElectricalAnalysis,
     setSelectedComponent,
-    simulationSource
+    simulationSource,
+    applyDigitalComponentValue,
+    startWhatIf,
+    applyWhatIfToCircuit,
+    cancelWhatIf,
+    whatIfState,
+    exportDigitalCircuitJson,
+    importDigitalCircuitJson,
+    isEditMode,
+    setIsEditMode,
+    undoDigitalEdit,
+    redoDigitalEdit,
+    resetDigitalChanges,
+    canUndo,
+    canRedo
   } = useCircuit();
 
   // Camera Source Mode: 'phone' (Default flagship) | 'laptop'
@@ -45,18 +62,42 @@ export default function LiveCamera() {
   const [previousState, setPreviousState] = useState(null);
   const [detections, setDetections] = useState([]);
 
-  // Modals
+  // Live Tracking Metrics State
+  const [trackingMetrics, setTrackingMetrics] = useState({
+    detected: 0,
+    tracked: 0,
+    lost: 0,
+    fps: 0,
+    latency: 0,
+    backendConnected: true
+  });
+
+  const [registration, setRegistration] = useState(null);
+
+  // Modals & Digital Lab State
   const [valueModalComp, setValueModalComp] = useState(null);
   const [correctionModalComp, setCorrectionModalComp] = useState(null);
+  const [digitalConfirmData, setDigitalConfirmData] = useState({
+    isOpen: false,
+    component: null,
+    oldValue: '',
+    newValue: '',
+    rawVal: '',
+    rawUnit: ''
+  });
 
   // DOM & WebRTC Refs
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const overlayRef = useRef(null);
+  const videoContainerRef = useRef(null);
   const streamRef = useRef(null);
   const sampleTimer = useRef(null);
   const wsRef = useRef(null);
   const pcRef = useRef(null);
+  const isAnalyzingRef = useRef(false);
+  const lastFrameTimeRef = useRef(Date.now());
+  const fileInputRef = useRef(null);
 
   // 1. Generate Session ID & Fetch LAN IP for Phone Pairing
   const generateNewSession = useCallback(() => {
@@ -302,7 +343,7 @@ export default function LiveCamera() {
     return canvas.toDataURL('image/jpeg', 0.85);
   };
 
-  // 6. Draw Bounding Box Visual Overlay over Camera Preview
+  // 6. Draw Bounding Box Visual Overlay over Camera Preview with State-Based Color Codes
   const drawOverlayDetections = (dets, imgW = 800, imgH = 600) => {
     if (!overlayRef.current) return;
     const overlay = overlayRef.current;
@@ -323,8 +364,8 @@ export default function LiveCamera() {
     const sourceW = (videoRef.current && videoRef.current.videoWidth > 0) ? videoRef.current.videoWidth : imgW;
     const sourceH = (videoRef.current && videoRef.current.videoHeight > 0) ? videoRef.current.videoHeight : imgH;
 
-    const scaleX = overlay.width / max(sourceW, 1);
-    const scaleY = overlay.height / max(sourceH, 1);
+    const scaleX = overlay.width / Math.max(sourceW, 1);
+    const scaleY = overlay.height / Math.max(sourceH, 1);
 
     dets.forEach(d => {
       const bbox = d.bbox || d.bbox_pixels || [100, 100, 200, 200];
@@ -332,24 +373,45 @@ export default function LiveCamera() {
       const y1 = bbox[1] * scaleY;
       const bw = (bbox[2] - bbox[0]) * scaleX;
       const bh = (bbox[3] - bbox[1]) * scaleY;
-      const label = `${d.id || d.designator || 'Comp'}: ${d.class || d.type || 'Component'} (${Math.round((d.confidence || 0.9) * 100)}%)`;
+      
+      const state = (d.tracking_state || 'TRACKED').toUpperCase();
+      let strokeColor = '#10b981'; // TRACKED
+      if (state === 'DETECTED') strokeColor = '#38bdf8';
+      else if (state === 'REACQUIRED') strokeColor = '#f59e0b';
+      else if (state === 'LOST') strokeColor = '#ef4444';
 
-      ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 3;
+      ctx.save();
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 2.5;
+      if (state === 'LOST') {
+        ctx.setLineDash([6, 4]);
+      } else {
+        ctx.setLineDash([]);
+      }
       ctx.strokeRect(x1, y1, bw, bh);
 
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-      ctx.fillRect(x1, max(0, y1 - 24), ctx.measureText(label).width + 12, 24);
+      const confPct = Math.round((d.confidence || d.tracking_confidence || 0.9) * 100);
+      const label = `${d.designator || d.id || 'Comp'} • ${(d.type || d.class || 'Component').toUpperCase()} (${confPct}%) [${state}]`;
 
-      ctx.fillStyle = '#f8fafc';
-      ctx.font = '12px Inter, sans-serif';
-      ctx.fillText(label, x1 + 6, max(16, y1 - 8));
+      ctx.font = 'bold 11px Inter, sans-serif';
+      const textWidth = ctx.measureText(label).width;
+      
+      ctx.fillStyle = 'rgba(8, 12, 24, 0.92)';
+      ctx.fillRect(x1, Math.max(0, y1 - 22), textWidth + 12, 22);
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x1, Math.max(0, y1 - 22), textWidth + 12, 22);
+
+      ctx.fillStyle = strokeColor;
+      ctx.fillText(label, x1 + 6, Math.max(15, y1 - 7));
+      ctx.restore();
     });
   };
 
   // 7. Analyze Single Frame via FastAPI `/api/camera/analyze`
   const processFrameAnalysis = async (frameB64) => {
-    if (isAnalyzing) return;
+    if (isAnalyzingRef.current) return;
+    isAnalyzingRef.current = true;
     setIsAnalyzing(true);
 
     try {
@@ -360,6 +422,7 @@ export default function LiveCamera() {
       }
 
       if (!b64Payload) {
+        isAnalyzingRef.current = false;
         setIsAnalyzing(false);
         return;
       }
@@ -376,8 +439,24 @@ export default function LiveCamera() {
       const res = await requestLiveCameraAnalysis(b64Payload, previousState, pSource);
 
       if (res && res.status === 'success') {
-        setDetections(res.detections || []);
-        drawOverlayDetections(res.detections || []);
+        const now = Date.now();
+        const deltaSec = (now - lastFrameTimeRef.current) / 1000.0;
+        lastFrameTimeRef.current = now;
+        const currentFps = deltaSec > 0 ? Math.min(Math.round(1.0 / deltaSec), 30) : 3;
+
+        const summary = res.tracking_summary || {};
+        setTrackingMetrics({
+          detected: summary.detected_count !== undefined ? summary.detected_count : (res.mapped_components || []).length,
+          tracked: summary.tracked_count !== undefined ? summary.tracked_count : (res.mapped_components || []).filter(c => c.tracking_state === 'TRACKED').length,
+          lost: summary.lost_count !== undefined ? summary.lost_count : (res.mapped_components || []).filter(c => c.tracking_state === 'LOST').length,
+          fps: currentFps,
+          latency: res.latency_ms || 110,
+          backendConnected: true
+        });
+
+        setDetections(res.mapped_components || res.detections || []);
+        drawOverlayDetections(res.mapped_components || res.detections || []);
+        setRegistration(res.registration || null);
 
         if (res.change_events && res.change_events.length > 0) {
           setEvents(prev => [...res.change_events, ...prev].slice(0, 10));
@@ -400,10 +479,14 @@ export default function LiveCamera() {
             runElectricalAnalysis();
           }
         }
+      } else {
+        setTrackingMetrics(prev => ({ ...prev, backendConnected: false }));
       }
     } catch (e) {
       console.warn("Live camera analysis error:", e);
+      setTrackingMetrics(prev => ({ ...prev, backendConnected: false }));
     } finally {
+      isAnalyzingRef.current = false;
       setIsAnalyzing(false);
     }
   };
@@ -412,7 +495,7 @@ export default function LiveCamera() {
     processFrameAnalysis(null);
   };
 
-  // 8. Frame Sampling Loop (3–5 FPS async max)
+  // 8. Frame Sampling Loop (Controlled 3–5 FPS with concurrency lock)
   useEffect(() => {
     if (cameraStatus === 'video_ready' && !isDemoMode) {
       sampleTimer.current = setInterval(() => {
@@ -420,7 +503,7 @@ export default function LiveCamera() {
         if (frame) {
           processFrameAnalysis(frame);
         }
-      }, 350); // ~3 FPS for optimal temporal stability
+      }, 300); // ~3-4 FPS for optimal real-time tracking stability
     } else {
       if (sampleTimer.current) clearInterval(sampleTimer.current);
     }
@@ -439,25 +522,109 @@ export default function LiveCamera() {
   }, [stopCamera]);
 
   const comps = activeCircuit?.components || [];
-  const hostForQr = lanIp || window.location.hostname;
-  const phoneCameraUrl = `http://${hostForQr}:5173/phone-camera?session=${sessionId}`;
+  const phoneCameraUrl = `${FRONTEND_BASE_URL}/phone-camera?session=${sessionId}`;
+
+  const handleExportCircuitJson = () => {
+    const jsonStr = exportDigitalCircuitJson();
+    if (!jsonStr) return;
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `SmartBreadboard_Circuit_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportCircuitJson = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const res = importDigitalCircuitJson(event.target.result);
+      if (res && res.success) {
+        setLatestToast("Digital circuit imported successfully!");
+        setTimeout(() => setLatestToast(null), 3000);
+      } else {
+        alert(res?.error || "Failed to parse circuit JSON");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleOpenWhatIfPrompt = (comp) => {
+    const curVal = comp.user_override_value || comp.displayValue || comp.formatted_value || `${comp.value || 1000} ${comp.unit || 'Ω'}`;
+    const candidate = window.prompt(`Enter What-If hypothetical value for ${comp.designator || comp.id}:`, curVal);
+    if (candidate && candidate.trim()) {
+      startWhatIf(comp, candidate.trim());
+    }
+  };
 
   return (
     <div style={{ padding: '1.5rem', maxWidth: '1600px', margin: '0 auto', color: '#f8fafc' }}>
+      {/* Hidden file input for importing circuit JSON */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleImportCircuitJson}
+        accept=".json,application/json"
+        style={{ display: 'none' }}
+      />
+
       {/* Top Header / Title */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div>
           <h2 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 700, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Zap style={{ color: '#38bdf8' }} size={26} />
-            LIVE CIRCUIT DIGITAL TWIN
+            INTERACTIVE AR CIRCUIT LAB
           </h2>
           <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.88rem', color: '#94a3b8' }}>
-            Phone Camera WebRTC → AI Feature Tracking → Topology Reconstruction → Live MNA 3D Digital Twin
+            AR Camera Overlay ↔ Digital Modification ↔ MNA Solver ↔ 3D Digital Twin Synchronized
           </p>
         </div>
 
-        {/* Live Status Bar */}
-        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+        {/* Top Action Bar: Save / Load / Mode Selector */}
+        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={handleExportCircuitJson}
+            style={{
+              background: '#1e293b',
+              color: '#38bdf8',
+              border: '1px solid #334155',
+              borderRadius: '6px',
+              padding: '0.35rem 0.75rem',
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem'
+            }}
+            title="Save Digital Circuit as JSON"
+          >
+            <Download size={14} /> Save JSON
+          </button>
+
+          <button
+            onClick={() => fileInputRef.current && fileInputRef.current.click()}
+            style={{
+              background: '#1e293b',
+              color: '#a78bfa',
+              border: '1px solid #334155',
+              borderRadius: '6px',
+              padding: '0.35rem 0.75rem',
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem'
+            }}
+            title="Load Digital Circuit from JSON"
+          >
+            <Upload size={14} /> Load JSON
+          </button>
           {/* Camera Source Selector Pills */}
           <div style={{
             display: 'flex',
@@ -566,6 +733,55 @@ export default function LiveCamera() {
           <span>{latestToast}</span>
         </div>
       )}
+
+      {/* Live Tracking Status Bar */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '0.75rem',
+        background: 'rgba(15, 23, 42, 0.85)',
+        padding: '0.6rem 1rem',
+        borderRadius: '8px',
+        border: '1px solid rgba(255, 255, 255, 0.08)',
+        marginBottom: '1rem',
+        fontSize: '0.82rem'
+      }}>
+        {/* Connection States */}
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <span style={{ color: '#94a3b8' }}>Camera:</span>
+            <strong style={{ color: cameraActive ? '#10b981' : '#f59e0b' }}>
+              ● {cameraActive ? 'ACTIVE' : 'STANDBY'}
+            </strong>
+          </span>
+
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <span style={{ color: '#94a3b8' }}>Backend:</span>
+            <strong style={{ color: trackingMetrics.backendConnected ? '#10b981' : '#ef4444' }}>
+              ● {trackingMetrics.backendConnected ? 'CONNECTED' : 'DISCONNECTED'}
+            </strong>
+          </span>
+
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <span style={{ color: '#94a3b8' }}>Tracking:</span>
+            <strong style={{ color: cameraActive && !isAnalyzing ? '#10b981' : (isAnalyzing ? '#38bdf8' : '#64748b') }}>
+              ● {cameraActive ? (isAnalyzing ? 'PROCESSING' : 'ACTIVE') : 'IDLE'}
+            </strong>
+          </span>
+        </div>
+
+        {/* Dynamic Counters & Performance */}
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span>Detected: <strong style={{ color: '#38bdf8' }}>{trackingMetrics.detected}</strong></span>
+          <span>Tracked: <strong style={{ color: '#10b981' }}>{trackingMetrics.tracked}</strong></span>
+          <span>Lost: <strong style={{ color: trackingMetrics.lost > 0 ? '#ef4444' : '#94a3b8' }}>{trackingMetrics.lost}</strong></span>
+          <span style={{ color: 'rgba(255,255,255,0.2)' }}>|</span>
+          <span>FPS: <strong style={{ color: '#fbbf24' }}>{cameraActive ? trackingMetrics.fps : 0}</strong></span>
+          <span>Latency: <strong style={{ color: '#a78bfa' }}>{trackingMetrics.latency} ms</strong></span>
+        </div>
+      </div>
 
       {/* Main Split Grid (Live Camera | 3D Digital Twin) */}
       <div style={{
@@ -696,7 +912,7 @@ export default function LiveCamera() {
           </div>
 
           {/* Camera Video Container / QR Pairing Card */}
-          <div style={{ position: 'relative', width: '100%', height: '420px', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+          <div ref={videoContainerRef} style={{ position: 'relative', width: '100%', height: '420px', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
             
             {/* Always mounted video element for receiving WebRTC remote stream or Laptop webcam */}
             <video
@@ -715,18 +931,17 @@ export default function LiveCamera() {
               }}
             />
 
-            {/* Bounding Box Visual Overlay */}
-            <canvas
-              ref={overlayRef}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                pointerEvents: 'none',
-                display: (cameraActive || isDemoMode) ? 'block' : 'none'
-              }}
+            {/* Real-Time AR Camera Overlay */}
+            <ARCameraOverlay
+              videoRef={videoRef}
+              containerRef={videoContainerRef}
+              trackedComponents={detections}
+              registration={registration}
+              videoWidth={videoDimensions.width || 1280}
+              videoHeight={videoDimensions.height || 720}
+              isActive={(cameraActive || isDemoMode)}
+              onOpenEditModal={(c) => setValueModalComp(c)}
+              onOpenWhatIfModal={(c) => handleOpenWhatIfPrompt(c)}
             />
 
             {/* Phone Camera QR Pairing Screen (Shown when PHONE CAMERA is selected and phone is not yet streaming) */}
@@ -1025,6 +1240,17 @@ export default function LiveCamera() {
         <ValueInputModal
           component={valueModalComp}
           onClose={() => setValueModalComp(null)}
+          onConfirmOverride={(comp, val, unit, formatted) => {
+            setValueModalComp(null);
+            setDigitalConfirmData({
+              isOpen: true,
+              component: comp,
+              oldValue: comp.user_override_value || comp.displayValue || comp.formatted_value || `${comp.value || 1000} ${comp.unit || 'Ω'}`,
+              newValue: formatted || `${val} ${unit}`,
+              rawVal: val,
+              rawUnit: unit
+            });
+          }}
         />
       )}
 
@@ -1033,6 +1259,39 @@ export default function LiveCamera() {
         <UserCorrectionModal
           component={correctionModalComp}
           onClose={() => setCorrectionModalComp(null)}
+        />
+      )}
+
+      {/* Digital Change Confirmation Modal */}
+      {digitalConfirmData.isOpen && (
+        <DigitalChangeConfirmModal
+          isOpen={digitalConfirmData.isOpen}
+          component={digitalConfirmData.component}
+          oldValue={digitalConfirmData.oldValue}
+          newValue={digitalConfirmData.newValue}
+          onConfirm={() => {
+            applyDigitalComponentValue(
+              digitalConfirmData.component.id || digitalConfirmData.component.designator,
+              digitalConfirmData.rawVal,
+              digitalConfirmData.rawUnit
+            );
+            setDigitalConfirmData({ isOpen: false, component: null, oldValue: '', newValue: '', rawVal: '', rawUnit: '' });
+          }}
+          onCancel={() => setDigitalConfirmData({ isOpen: false, component: null, oldValue: '', newValue: '', rawVal: '', rawUnit: '' })}
+        />
+      )}
+
+      {/* What-If Simulation Comparison Modal */}
+      {whatIfState.active && (
+        <WhatIfComparisonModal
+          isOpen={whatIfState.active}
+          targetComponent={whatIfState.targetComponent}
+          originalValue={whatIfState.originalValue}
+          candidateValue={whatIfState.candidateValue}
+          originalSimulationResult={whatIfState.originalSimulationResult}
+          whatIfSimulationResult={whatIfState.whatIfSimulationResult}
+          onApply={applyWhatIfToCircuit}
+          onDiscard={cancelWhatIf}
         />
       )}
     </div>

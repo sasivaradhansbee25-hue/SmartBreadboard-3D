@@ -6,7 +6,7 @@ Phase 9 OpenCV Preprocessing, Phase 10 YOLO Detection, Phase 11 Resistor Color, 
 import os
 import socket
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -17,9 +17,10 @@ from cv.detector_interface import CompositeComponentDetector
 from core.circuit_model import build_netlist_from_detections
 from circuit_solver.dc_solver import run_dc_analysis
 from circuit_solver.transient_solver import run_transient_analysis
-from circuit_solver.results import format_solver_result
+from circuit_solver.results import format_solver_result, build_digital_twin_payload
 
 from cv.camera_tracker import match_components_spatially
+from cv.breadboard_grid import compute_breadboard_registration
 
 app = FastAPI(
     title="SmartBreadboard 3D FastAPI Backend Server",
@@ -63,6 +64,7 @@ class BuildCircuitRequest(BaseModel):
     image_base64: Optional[str] = None
     detections: Optional[List[Dict[str, Any]]] = []
     resistor_analysis: Optional[List[Dict[str, Any]]] = []
+    power_source: Optional[Dict[str, Any]] = None
 
 class CircuitCalculateRequest(BaseModel):
     circuit_id: str
@@ -83,7 +85,7 @@ def read_root():
     return {
         "status": "online",
         "service": "SmartBreadboard 3D FastAPI Engine",
-        "phase": "Phase 9-13 AI & MNA Electrical Solver Active",
+        "phase": "Phase 9-14 AI & MNA Electrical Solver & Digital Twin Active",
         "endpoints_count": 11
     }
 
@@ -106,14 +108,40 @@ def detect_components_endpoint(req: ImageAnalysisRequest):
     result = detect_and_annotate_components(req.image_base64, conf_threshold=0.45)
     return result
 
-# 1. POST /api/analyze-image (Phase 9 Real OpenCV Preprocessing)
+# 1. POST /api/analyze-image (End-to-End Real AI Circuit Analysis Pipeline)
 @app.post("/api/analyze-image")
-def analyze_image(req: ImageAnalysisRequest):
-    if not req.image_base64:
-        raise HTTPException(status_code=400, detail="Missing required image_base64 string.")
+async def analyze_image_endpoint(
+    file: Optional[UploadFile] = File(None),
+    req: Optional[ImageAnalysisRequest] = None
+):
+    import base64
+    image_bytes = None
+    if file:
+        image_bytes = await file.read()
+    elif req and req.image_base64:
+        b64_str = req.image_base64
+        if ',' in b64_str:
+            b64_str = b64_str.split(',')[1]
+        image_bytes = base64.b64decode(b64_str)
 
-    result = preprocess_breadboard_image(req.image_base64)
-    return result
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Missing image file upload or image_base64 field.")
+
+    api_res = detect_and_annotate_components(image_bytes, conf_threshold=0.45)
+    orig_b64 = f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+
+    return {
+        "status": "success",
+        "source": "real",
+        "originalImage": orig_b64,
+        "detections": api_res.get("detections", []),
+        "counts": api_res.get("counts", {}),
+        "mapped_components": api_res.get("mapped_components", []),
+        "netlist": api_res.get("netlist"),
+        "nets_summary": api_res.get("nets_summary", []),
+        "annotated_image": api_res.get("annotated_image"),
+        "imageMeta": api_res.get("image_meta", {})
+    }
 
 # 2. POST /api/detect-components (Phase 10 Real Component Detection)
 @app.post("/api/detect-components")
@@ -144,12 +172,33 @@ def build_circuit(req: BuildCircuitRequest):
         det_res = detect_components_yolo(req.image_base64)
         detections = det_res.get("detections", [])
 
-    netlist_result = build_netlist_from_detections(detections, req.resistor_analysis)
+    netlist_result = build_netlist_from_detections(
+        detections,
+        req.resistor_analysis,
+        power_source=req.power_source
+    )
     
-    # Automatically run DC electrical solver on built netlist
-    if netlist_result and "netlist" in netlist_result:
-        solver_res = run_dc_analysis(netlist_result["netlist"])
-        netlist_result["electrical_analysis"] = format_solver_result(solver_res)
+    # MNA Integration: Only run solver when circuit topology is VALID/READY
+    solver_status = netlist_result.get("solver_status", "NOT_RUN")
+    if solver_status == "READY":
+        try:
+            solver_res = run_dc_analysis(netlist_result)
+            formatted = format_solver_result(solver_res, netlist_result)
+            netlist_result["electrical_analysis"] = formatted
+            netlist_result["digital_twin"] = formatted.get("digital_twin")
+        except Exception as e:
+            netlist_result["electrical_analysis"] = {
+                "solver_status": "ERROR",
+                "reason": str(e)
+            }
+            netlist_result["digital_twin"] = build_digital_twin_payload(netlist_result, solver_status="ERROR", reason=str(e))
+    else:
+        reason = netlist_result.get("solver_reason", "Circuit topology incomplete")
+        netlist_result["electrical_analysis"] = {
+            "solver_status": "NOT_RUN",
+            "reason": reason
+        }
+        netlist_result["digital_twin"] = build_digital_twin_payload(netlist_result, solver_status="NOT_RUN", reason=reason)
 
     return netlist_result
 
@@ -159,8 +208,16 @@ def analyze_circuit_endpoint(req: CircuitAnalysisRequest):
     if not req.netlist:
         raise HTTPException(status_code=400, detail="Missing required netlist dictionary.")
 
+    validity = req.netlist.get("validity", {})
+    val_status = validity.get("status")
+    solver_status = req.netlist.get("solver_status")
+
+    if val_status in ["INCOMPLETE", "INVALID"] or solver_status == "NOT_RUN":
+        reason = req.netlist.get("solver_reason") or "Circuit topology incomplete or invalid"
+        return format_solver_result(None, req.netlist)
+
     res = run_dc_analysis(req.netlist)
-    return format_solver_result(res)
+    return format_solver_result(res, req.netlist)
 
 # 6. POST /api/circuit/simulate (Dedicated Transient Simulation Endpoint)
 @app.post("/api/circuit/simulate")
@@ -187,7 +244,7 @@ def analyze_camera_frame(req: CameraFrameRequest):
     raw_comps = api_res.get("mapped_components", [])
     prev_comps = req.previous_state.get("components", []) if req.previous_state else []
 
-    # 2. Match components spatially & track ID consistency
+    # 2. Match components spatially with state machine (DETECTED, TRACKED, LOST, REACQUIRED)
     tracked_comps, change_events = match_components_spatially(raw_comps, prev_comps)
     netlist = api_res.get("netlist", {})
     if netlist:
@@ -197,12 +254,30 @@ def analyze_camera_frame(req: CameraFrameRequest):
 
     # 3. Run DC analysis if netlist exists
     electrical_analysis = None
+    digital_twin = None
     if netlist:
         try:
-            solver_res = run_dc_analysis(netlist)
-            electrical_analysis = format_solver_result(solver_res)
+            solver_status = netlist.get("solver_status", "READY")
+            if solver_status != "NOT_RUN":
+                solver_res = run_dc_analysis(netlist)
+                electrical_analysis = format_solver_result(solver_res, netlist)
+                digital_twin = electrical_analysis.get("digital_twin")
+            else:
+                electrical_analysis = format_solver_result(None, netlist)
+                digital_twin = electrical_analysis.get("digital_twin")
         except Exception as e:
             print(f"[Camera API] Solver warning: {e}")
+
+    # 4. Compute real-time AR breadboard registration & homography
+    img_meta = api_res.get("image_meta", {})
+    img_w = img_meta.get("width", 1280)
+    img_h = img_meta.get("height", 850)
+    registration = compute_breadboard_registration(img_w, img_h, tracked_comps)
+
+    # Compute tracking summary metrics
+    detected_count = len([c for c in tracked_comps if c.get("tracking_state") in ["DETECTED", "TRACKED", "REACQUIRED"]])
+    tracked_count = len([c for c in tracked_comps if c.get("tracking_state") in ["TRACKED", "REACQUIRED"]])
+    lost_count = len([c for c in tracked_comps if c.get("tracking_state") == "LOST"])
 
     return {
         "status": "success",
@@ -212,7 +287,15 @@ def analyze_camera_frame(req: CameraFrameRequest):
         "mapped_components": tracked_comps,
         "netlist": netlist,
         "electrical_analysis": electrical_analysis,
+        "digital_twin": digital_twin,
+        "registration": registration,
         "annotated_image": api_res.get("annotated_image"),
+        "tracking_summary": {
+            "detected_count": detected_count,
+            "tracked_count": tracked_count,
+            "lost_count": lost_count,
+            "total_count": len(tracked_comps)
+        },
         "disclaimer": "Simulation result — calculated from reconstructed topology and source conditions."
     }
 

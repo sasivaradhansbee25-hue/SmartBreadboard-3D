@@ -8,6 +8,8 @@ import re
 from datetime import datetime
 from cv.breadboard_grid import extract_component_lead_positions
 from cv.value_consensus import extract_value_consensus_from_crop, build_fallback_response
+from core.wire_connectivity import build_electrical_connectivity, get_base_node_for_hole
+from core.circuit_validator import validate_circuit
 
 def get_base_node_for_hole(hole_id: str) -> str:
 
@@ -57,11 +59,12 @@ class DisjointSetUnion:
         if root_i != root_j:
             self.parent[root_i] = root_j
 
-def build_netlist_from_detections(detections: list[dict], resistor_analyses: list[dict] = None, img_w: int = 800, img_h: int = 300) -> dict:
+def build_netlist_from_detections(detections: list[dict], resistor_analyses: list[dict] = None, img_w: int = 800, img_h: int = 300, power_source: dict = None) -> dict:
     """
     Converts YOLO detections into a complete Circuit Data Model JSON netlist.
     Applies solderless breadboard terminal strip rules and merges nodes connected by jumper wires.
     Outputs normalized component schema with start_hole/end_hole, confidence, nets, and uncertainty flags.
+    Distinguishes physically detected power connections vs user-provided power source vs unpowered.
     """
     dsu = DisjointSetUnion()
     processed_components = []
@@ -143,9 +146,23 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
         if c_type in ["wire", "jumper"]:
             dsu.union(raw_node1, raw_node2)
 
-        # Multi-pass value consensus extraction
-        crop_b64 = d.get("crop_base64")
-        if crop_b64 and c_type not in ["wire", "jumper"]:
+        # Multi-pass value consensus extraction or analysis injection
+        crop_b64 = d.get("crop_base64") or d.get("crop_b64")
+        if c_id in resistor_val_map:
+            val_consensus = resistor_val_map[c_id]
+        elif designator in resistor_val_map:
+            val_consensus = resistor_val_map[designator]
+        elif "value" in d and d.get("value") is not None:
+            val_consensus = {
+                "value": d.get("value"),
+                "unit": d.get("unit", "Ω"),
+                "displayValue": str(d.get("value")),
+                "valueSource": "user_override" if d.get("user_override_value") else "detected",
+                "confidence": float(d.get("confidence", 0.9)),
+                "needsConfirmation": d.get("needsConfirmation", False),
+                "rawCandidates": []
+            }
+        elif crop_b64 and c_type not in ["wire", "jumper"]:
             val_consensus = extract_value_consensus_from_crop(crop_b64, comp_type=c_type, comp_id=designator)
         else:
             if c_type in ["wire", "jumper"]:
@@ -185,8 +202,6 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
             "needsConfirmation": val_consensus.get("needsConfirmation", True),
             "rawCandidates": val_consensus.get("rawCandidates", []),
             "user_override_value": None,
-            "raw_node1": raw_node1,
-            "raw_node2": raw_node2,
             "lead1_distance_px": dist1,
             "lead2_distance_px": dist2,
             "connection_warning": is_uncertain
@@ -194,75 +209,96 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
 
         comp_counter += 1
 
-    # Map DSU canonical roots to user-friendly Node IDs (N1_VCC, N2_GND, NET1, NET2, etc.)
-    root_to_final_id = {}
-    net_counter = 1
+    # Delegate electrical connectivity calculation to wire_connectivity engine
+    conn = build_electrical_connectivity(processed_components)
 
-    for comp in processed_components:
-        root1 = dsu.find(comp["raw_node1"])
-        root2 = dsu.find(comp["raw_node2"])
+    nodes_list = conn["nodes"]
+    formatted_nets = conn["nets"]
+    pins_list = conn["pins"]
+    wires_list = conn["wires"]
+    updated_components = conn["components"]
+    connectivity_warnings = conn["warnings"]
 
-        for root in [root1, root2]:
-            if root not in root_to_final_id:
-                if "POWER_VCC" in root:
-                    root_to_final_id[root] = "NET_VCC (+5V)"
-                elif "GROUND" in root:
-                    root_to_final_id[root] = "NET_GND (0V)"
-                else:
-                    root_to_final_id[root] = f"NET{net_counter}"
-                    net_counter += 1
-
-        comp["node1"] = root_to_final_id[root1]
-        comp["node2"] = root_to_final_id[root2]
-
-        del comp["raw_node1"]
-        del comp["raw_node2"]
-
-    # Build nodes and electrical nets pin connection map (e.g. NET1: R1.1, D1.1, W1.1)
-    nodes_list = []
-    nets_map = {}
-
-    for root, final_id in root_to_final_id.items():
-        is_gnd = "GND" in final_id
-        is_pwr = "VCC" in final_id
-        nodes_list.append({
-            "id": final_id,
-            "label": f"Supply (+5V)" if is_pwr else (f"Ground (0V)" if is_gnd else f"Net {final_id}"),
-            "is_supply": is_pwr,
-            "is_ground": is_gnd
-        })
-        nets_map[final_id] = {
-            "net_id": final_id,
-            "name": final_id,
-            "connected_pins": [],
-            "holes": set()
-        }
-
-    for comp in processed_components:
-        n1 = comp["node1"]
-        n2 = comp["node2"]
-        des = comp["designator"]
-        h1 = comp["start_hole"]
-        h2 = comp["end_hole"]
-
-        if n1 in nets_map:
-            nets_map[n1]["connected_pins"].append(f"{des}.1")
-            nets_map[n1]["holes"].add(h1)
-        if n2 in nets_map:
-            nets_map[n2]["connected_pins"].append(f"{des}.2")
-            nets_map[n2]["holes"].add(h2)
-
-    formatted_nets = []
     nets_summary_strings = []
-    for net_id, n_data in nets_map.items():
-        pins_str = ", ".join(n_data["connected_pins"]) if n_data["connected_pins"] else "None"
-        nets_summary_strings.append(f"{net_id}: {pins_str}")
-        formatted_nets.append({
-            "id": net_id,
-            "name": net_id,
-            "connected_pins": n_data["connected_pins"],
-            "holes": sorted(list(n_data["holes"]))
-        })
+    for n in formatted_nets:
+        pins_str = ", ".join(n["connected_pins"]) if n["connected_pins"] else "None"
+        nets_summary_strings.append(f"{n['net_id']}: {pins_str}")
+
+    # ----------------------------------------------------
+    # Power Source Handling (Physical Detected vs User vs None)
+    # ----------------------------------------------------
+    vcc_net = next((n for n in formatted_nets if "VCC" in n["net_id"].upper() or any("VCC" in str(h).upper() for h in n.get("holes", []))), None)
+    gnd_net = next((n for n in formatted_nets if "GND" in n["net_id"].upper() or any("GND" in str(h).upper() for h in n.get("holes", []))), None)
+
+    # Check if circuit components actually connect to power rails
+    vcc_connected = vcc_net is not None and len(vcc_net.get("connected_pins", [])) > 0
+    gnd_connected = gnd_net is not None and len(gnd_net.get("connected_pins", [])) > 0
+
+    if power_source:
+        # Case B: User-provided power source
+        p_pos = power_source.get("node_pos") or power_source.get("positive_node") or power_source.get("positiveNode")
+        p_neg = power_source.get("node_neg") or power_source.get("negative_node") or power_source.get("negativeNode")
+        p_volt = power_source.get("voltage")
+        
+        # If user didn't specify pos/neg, default to VCC/GND nets if available, or first available nets
+        if not p_pos:
+            p_pos = vcc_net["net_id"] if vcc_net else (formatted_nets[0]["net_id"] if len(formatted_nets) > 0 else None)
+        if not p_neg:
+            p_neg = gnd_net["net_id"] if gnd_net else (formatted_nets[-1]["net_id"] if len(formatted_nets) > 1 else None)
+
+        power_source_status = {
+            "detected": False,
+            "source": "user",
+            "voltage": p_volt,
+            "node_pos": p_pos,
+            "node_neg": p_neg,
+            "confidence": 1.0
+        }
+        power_sources = [
+            {
+                "id": power_source.get("id", "V1"),
+                "type": power_source.get("type", "dc"),
+                "voltage": p_volt,
+                "node_pos": p_pos,
+                "node_neg": p_neg,
+                "positive_node": p_pos,
+                "negative_node": p_neg
+            }
+        ]
+    elif vcc_connected and gnd_connected:
+        # Case A: Physically detected power rail connection (do not invent voltage)
+        power_source_status = {
+            "detected": True,
+            "source": "detected",
+            "voltage": None,
+            "node_pos": vcc_net["net_id"],
+            "node_neg": gnd_net["net_id"],
+            "positive_node": vcc_net["net_id"],
+            "negative_node": gnd_net["net_id"],
+            "confidence": 0.85
+        }
+        power_sources = [
+            {
+                "id": "V1",
+                "type": "dc",
+                "voltage": None,
+                "node_pos": vcc_net["net_id"],
+                "node_neg": gnd_net["net_id"],
+                "positive_node": vcc_net["net_id"],
+                "negative_node": gnd_net["net_id"]
+            }
+        ]
+    else:
+        # Case C: No power source detected
+        power_source_status = {
+            "detected": False,
+            "source": "none",
+            "voltage": None,
+            "node_pos": None,
+            "node_neg": None,
+            "confidence": 0.0
+        }
+        power_sources = []
 
     # Construct final Circuit Data Model JSON per SPEC.md Section 9
     netlist_model = {
@@ -273,24 +309,29 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
             "source": "real",
             "created_at": datetime.now().isoformat()
         },
-        "power_sources": [
-            {
-                "id": "V1",
-                "type": "dc",
-                "voltage": 5.0,
-                "node_pos": "NET_VCC (+5V)",
-                "node_neg": "NET_GND (0V)"
-            }
-        ],
+        "power_source_status": power_source_status,
+        "power_sources": power_sources,
         "nodes": nodes_list,
         "nets": formatted_nets,
         "nets_summary": nets_summary_strings,
-        "components": processed_components,
-        "validity": {
-            "status": "PASS",
-            "errors": [],
-            "warnings": [c["id"] for c in processed_components if c.get("uncertain_mapping")]
-        }
+        "components": updated_components,
+        "pins": pins_list,
+        "wires": wires_list
     }
+
+    # Run Real Circuit Validator
+    val_res = validate_circuit(netlist_model)
+
+    # Embed validated topology and checks in netlist
+    netlist_model["validity"] = {
+        "status": val_res["status"],
+        "valid": val_res["valid"],
+        "errors": val_res["errors"],
+        "warnings": list(dict.fromkeys(connectivity_warnings + val_res["warnings"])),
+        "checks": val_res["checks"],
+        "component_connectivity": val_res["component_connectivity"]
+    }
+    netlist_model["solver_status"] = val_res["solver_status"]
+    netlist_model["solver_reason"] = val_res["solver_reason"]
 
     return netlist_model

@@ -27,8 +27,8 @@ def validate_circuit_netlist(components: List[Dict[str, Any]], power_sources: Li
     # Validate each power source
     for ps in power_sources:
         v_val = float(ps.get("voltage", ps.get("value", 0.0)))
-        pos_n = str(ps.get("positive_node", ps.get("positiveNode", ps.get("node1", ""))))
-        neg_n = str(ps.get("negative_node", ps.get("negativeNode", ps.get("node2", ""))))
+        pos_n = str(ps.get("positive_node") or ps.get("node_pos") or ps.get("positiveNode") or ps.get("node1", ""))
+        neg_n = str(ps.get("negative_node") or ps.get("node_neg") or ps.get("negativeNode") or ps.get("node2", ""))
 
         if v_val <= 0:
             return False, {

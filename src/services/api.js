@@ -1,11 +1,6 @@
-// Centralized Service Layer Base HTTP API Client
-// Abstracted service layer decoupling UI components from hardcoded URLs
-// Reads VITE_API_BASE_URL in production or defaults to http://127.0.0.1:8000 in local development
+import { API_BASE_URL, FRONTEND_BASE_URL, WS_BASE_URL } from '../config/api';
 
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
-
-// WebSocket base URL derived from API_BASE_URL (http -> ws, https -> wss)
-export const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws');
+export { API_BASE_URL, FRONTEND_BASE_URL, WS_BASE_URL };
 
 export async function apiRequest(endpoint, method = 'GET', body = null) {
   try {

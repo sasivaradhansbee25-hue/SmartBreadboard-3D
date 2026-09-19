@@ -1,16 +1,27 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, CameraOff, RefreshCw, Zap, CheckCircle2, AlertTriangle, ShieldCheck } from 'lucide-react';
-import { WS_BASE_URL } from '../services/api';
+import { useNavigate } from 'react'
+import { Camera, CameraOff, RefreshCw, Zap, CheckCircle2, AlertTriangle, ShieldCheck, Upload, Sparkles, Eye, Box, ArrowRight } from 'lucide-react';
+import { API_BASE_URL, WS_BASE_URL } from '../services/api';
+import { useCircuit } from '../context/CircuitContext';
 
 export default function PhoneCamera() {
+  const navigate = useNavigate();
+  const { setRealCircuitData, setIsAnalyzingReal, setRealAnalysisError } = useCircuit();
+
   const [sessionId, setSessionId] = useState('');
-  const [status, setStatus] = useState('idle'); // idle, requesting, connecting_ws, connecting_webrtc, streaming, error
+  const [status, setStatus] = useState('idle'); // idle, requesting, streaming, analyzing, complete, error
   const [errorMessage, setErrorMessage] = useState(null);
+
+  // Photo Capture & Direct Upload State
+  const [capturedImage, setCapturedImage] = useState(null); // base64 or blob URL
+  const [capturedFile, setCapturedFile] = useState(null); // File object
+  const [analysisResult, setAnalysisResult] = useState(null);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const wsRef = useRef(null);
   const pcRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -45,15 +56,22 @@ export default function PhoneCamera() {
     stopPhoneStream();
     setErrorMessage(null);
     setStatus('requesting');
+    setCapturedImage(null);
+    setCapturedFile(null);
+    setAnalysisResult(null);
 
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error("Camera API not supported in this browser. Please use a modern mobile browser (Chrome/Safari).");
+        throw new Error("Camera API unavailable in this browser context (HTTP LAN). Use the file input button below to capture or pick a circuit photo directly.");
       }
 
-      // 1. Request environment/rear camera stream
+      // 1. Request environment/rear camera stream with optimal mobile resolution
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
         audio: false
       });
 
@@ -67,110 +85,168 @@ export default function PhoneCamera() {
         }
       }
 
-      setStatus('connecting_ws');
+      setStatus('streaming');
 
-      // 2. Connect to FastAPI WebSocket signaling server
-      const wsUrl = `${WS_BASE_URL}/ws/camera/${sessionId}?role=phone`;
+      // 2. Optional WebSocket signaling attempt
+      try {
+        const wsUrl = `${WS_BASE_URL}/ws/camera/${sessionId}?role=phone`;
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
 
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+        ws.onopen = () => {
+          console.log("[Phone] WebSocket connected to session:", sessionId);
+          initWebRTCConnection(stream, ws);
+        };
 
-      ws.onopen = () => {
-        console.log("[Phone] WebSocket connected to laptop session:", sessionId);
-        setStatus('connecting_webrtc');
-        initWebRTCConnection(stream, ws);
-      };
-
-      ws.onmessage = async (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          const pc = pcRef.current;
-
-          if (msg.type === 'peer_status') {
-            if (msg.status === 'connected' && streamRef.current && wsRef.current) {
-              console.log("[Phone] Laptop connected to session. Restarting WebRTC offer...");
+        ws.onmessage = async (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            const pc = pcRef.current;
+            if (msg.type === 'peer_status' && msg.status === 'connected' && streamRef.current && wsRef.current) {
               initWebRTCConnection(streamRef.current, wsRef.current);
-            } else if (msg.status === 'disconnected') {
-              console.log("[Phone] Laptop disconnected");
-              setStatus('connecting_webrtc');
+            } else if (msg.type === 'answer' && pc) {
+              await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
+            } else if (msg.type === 'ice_candidate' && pc && msg.candidate) {
+              await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
             }
-          } else if (msg.type === 'answer' && pc) {
-            console.log("[Phone] Received SDP answer from laptop");
-            await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
-          } else if (msg.type === 'ice_candidate' && pc && msg.candidate) {
-            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+          } catch (e) {
+            console.warn("[Phone WS] Message error:", e);
           }
-        } catch (e) {
-          console.warn("[Phone WS] Message error:", e);
-        }
-      };
-
-      ws.onerror = (e) => {
-        console.warn("[Phone WS] Error:", e);
-        setErrorMessage("Signaling server connection error. Ensure laptop backend is running.");
-        setStatus('error');
-      };
-
-      ws.onclose = () => {
-        console.log("[Phone WS] Closed");
-      };
+        };
+      } catch (wsErr) {
+        console.warn("[Phone WS] Non-critical signaling notice:", wsErr);
+      }
     } catch (err) {
-      console.warn("[Phone] Camera error:", err);
-      setErrorMessage(err.message || "Failed to access phone camera. Please grant camera permissions.");
+      console.warn("[Phone] Camera access warning:", err);
+      setErrorMessage(err.message || "Could not start camera stream. Use File Upload capture below.");
       setStatus('error');
     }
   };
 
   const initWebRTCConnection = async (stream, ws) => {
     try {
-      if (pcRef.current) {
-        pcRef.current.close();
-      }
-
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-      });
+      if (pcRef.current) pcRef.current.close();
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
       pcRef.current = pc;
 
-      // Add camera tracks to peer connection
-      stream.getTracks().forEach(track => {
-        pc.addTrack(track, stream);
-      });
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      // Relay local ICE candidates to laptop via WebSocket
-      pc.onicecandidate = (event) => {
-        if (event.candidate && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: 'ice_candidate',
-            candidate: event.candidate
-          }));
+      pc.onicecandidate = (e) => {
+        if (e.candidate && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ice_candidate', candidate: e.candidate }));
         }
       };
 
-      pc.onconnectionstatechange = () => {
-        console.log("[Phone WebRTC] Connection state:", pc.connectionState);
-        if (pc.connectionState === 'connected') {
-          setStatus('streaming');
-        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-          setStatus('connecting_webrtc');
-        }
-      };
-
-      // Create WebRTC SDP offer and send to laptop
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'offer',
-          sdp: offer.sdp
-        }));
-        console.log("[Phone] WebRTC offer sent to laptop");
+        ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp }));
       }
     } catch (e) {
-      console.warn("[Phone WebRTC] Init error:", e);
-      setErrorMessage("Failed to establish WebRTC peer connection.");
+      console.warn("[Phone WebRTC] Peer connection notice:", e);
+    }
+  };
+
+  // Action: CAPTURE PHOTO from active video stream
+  const capturePhotoFromStream = () => {
+    if (!videoRef.current) return;
+
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob((blob) => {
+      if (blob) {
+        const file = new File([blob], `phone-circuit-${Date.now()}.jpg`, { type: 'image/jpeg' });
+        setCapturedFile(file);
+        setCapturedImage(canvas.toDataURL('image/jpeg'));
+        stopPhoneStream();
+      }
+    }, 'image/jpeg', 0.92);
+  };
+
+  // Action: UPLOAD PHOTO via File Input
+  const handleFileInputChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setCapturedFile(file);
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        setCapturedImage(evt.target?.result);
+      };
+      reader.readAsDataURL(file);
+      stopPhoneStream();
+    }
+  };
+
+  // Action: ANALYZE CIRCUIT via POST ${API_BASE_URL}/api/analyze-image
+  const analyzeCapturedCircuit = async () => {
+    if (!capturedFile && !capturedImage) {
+      alert("Please capture or upload a circuit image first.");
+      return;
+    }
+
+    setStatus('analyzing');
+    setErrorMessage(null);
+    setIsAnalyzingReal(true);
+    setRealAnalysisError(null);
+
+    try {
+      let resp;
+      if (capturedFile) {
+        const formData = new FormData();
+        formData.append("file", capturedFile, capturedFile.name || "phone-circuit.jpg");
+
+        resp = await fetch(`${API_BASE_URL}/api/analyze-image`, {
+          method: 'POST',
+          body: formData
+        });
+      } else {
+        resp = await fetch(`${API_BASE_URL}/api/analyze-image`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_base64: capturedImage })
+        });
+      }
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`AI Backend Error (HTTP ${resp.status}): ${text}`);
+      }
+
+      const data = await resp.json();
+      console.log("[Phone] Received AI Analysis Result:", data);
+
+      if (data.status === "error" || (data.success === false && data.error)) {
+        throw new Error(data.error || "YOLO Detection pipeline failed.");
+      }
+
+      setAnalysisResult(data);
+      setStatus('complete');
+      setIsAnalyzingReal(false);
+
+      // Synchronize with global CircuitContext
+      setRealCircuitData({
+        originalImage: data.originalImage || capturedImage,
+        detections: data.detections || [],
+        mapped_components: data.mapped_components || [],
+        netlist: data.netlist || {},
+        imageMeta: data.imageMeta || {},
+        source: 'real'
+      });
+    } catch (err) {
+      console.error("[Phone] Analysis failure:", err);
+      let msg = err.message || "Failed to reach AI backend.";
+      if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
+        msg = `Cannot reach AI backend. Make sure FastAPI is running at ${API_BASE_URL}`;
+      }
+      setErrorMessage(msg);
+      setRealAnalysisError(msg);
       setStatus('error');
+      setIsAnalyzingReal(false);
     }
   };
 
@@ -179,6 +255,15 @@ export default function PhoneCamera() {
       stopPhoneStream();
     };
   }, []);
+
+  const counts = analysisResult?.counts || {
+    resistor: 0,
+    led: 0,
+    capacitor: 0,
+    diode_rectifier: 0,
+    wire: 0,
+    ic_chip: 0
+  };
 
   return (
     <div style={{
@@ -207,16 +292,16 @@ export default function PhoneCamera() {
           fontSize: '0.75rem',
           padding: '0.25rem 0.6rem',
           borderRadius: '12px',
-          background: status === 'streaming' ? '#064e3b' : '#334155',
-          color: status === 'streaming' ? '#6ee7b7' : '#94a3b8',
+          background: status === 'streaming' ? '#064e3b' : status === 'complete' ? '#0284c7' : '#334155',
+          color: status === 'streaming' ? '#6ee7b7' : '#f8fafc',
           fontWeight: 600
         }}>
-          {status === 'streaming' ? '🟢 STREAMING LIVE' : '📱 PHONE CAMERA'}
+          {status === 'streaming' ? '🟢 LIVE CAMERA' : status === 'complete' ? '✨ ANALYZED' : '📱 SCANNER MOBILE'}
         </span>
       </header>
 
       {/* Main Content Body */}
-      <main style={{ flex: 1, padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <main style={{ flex: 1, padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '600px', margin: '0 auto', width: '100%' }}>
         
         {/* Session Badge */}
         <div style={{
@@ -229,30 +314,40 @@ export default function PhoneCamera() {
           alignItems: 'center'
         }}>
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>PAIRING SESSION</div>
-            <div style={{ fontSize: '1rem', fontWeight: 700, color: '#38bdf8', fontFamily: 'monospace' }}>{sessionId}</div>
+            <div style={{ fontSize: '0.7rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>PAIRING SESSION ID</div>
+            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#38bdf8', fontFamily: 'monospace' }}>{sessionId}</div>
           </div>
 
-          <div style={{ fontSize: '0.8rem', color: status === 'streaming' ? '#34d399' : '#fbbf24', fontWeight: 600 }}>
-            {status === 'streaming' ? '● LAPTOP CONNECTED' :
-             status === 'connecting_webrtc' ? '🟡 WAITING FOR LAPTOP' :
-             status === 'connecting_ws' ? '🟡 CONNECTING WS' : '○ STANDBY'}
+          <div style={{ fontSize: '0.78rem', color: status === 'complete' ? '#38bdf8' : status === 'streaming' ? '#34d399' : '#fbbf24', fontWeight: 600 }}>
+            {status === 'complete' ? '● AI SOLVED' : status === 'streaming' ? '● CAMERA READY' : '○ READY FOR CAPTURE'}
           </div>
         </div>
 
-        {/* Live Camera Video Container */}
+        {/* Hidden File Input */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          accept="image/*"
+          capture="environment"
+          onChange={handleFileInputChange}
+          style={{ display: 'none' }}
+        />
+
+        {/* Media Container: Camera Stream / Preview */}
         <div style={{
           position: 'relative',
           width: '100%',
-          height: '65vh',
+          minHeight: '320px',
+          maxHeight: '480px',
           background: '#090d16',
           borderRadius: '12px',
           overflow: 'hidden',
-          border: status === 'streaming' ? '2px solid #10b981' : '1px solid #1e293b',
+          border: status === 'complete' ? '2px solid #38bdf8' : '1px solid #1e293b',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center'
         }}>
+          {/* Active Live Video Stream */}
           <video
             ref={videoRef}
             autoPlay
@@ -262,59 +357,128 @@ export default function PhoneCamera() {
               width: '100%',
               height: '100%',
               objectFit: 'cover',
-              display: (status === 'requesting' || status === 'connecting_ws' || status === 'connecting_webrtc' || status === 'streaming') ? 'block' : 'none'
+              display: (status === 'streaming' || status === 'requesting') && !capturedImage ? 'block' : 'none'
             }}
           />
 
-          {status === 'idle' && (
+          {/* Captured / Uploaded Image Preview */}
+          {capturedImage && (
+            <img
+              src={analysisResult?.annotated_image ? `data:image/png;base64,${analysisResult.annotated_image}` : capturedImage}
+              alt="Circuit Capture"
+              style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+            />
+          )}
+
+          {/* Idle State Banner */}
+          {status === 'idle' && !capturedImage && (
             <div style={{ textAlign: 'center', padding: '2rem', color: '#64748b' }}>
-              <Camera size={56} style={{ marginBottom: '1rem', opacity: 0.6 }} />
-              <h3 style={{ margin: '0 0 0.5rem 0', color: '#f8fafc', fontSize: '1.2rem' }}>Wireless Phone Camera</h3>
-              <p style={{ margin: 0, fontSize: '0.85rem', maxWidth: '280px', lineHeight: 1.4 }}>
-                SmartBreadboard needs access to your rear camera to scan the physical breadboard circuit.
+              <Camera size={52} style={{ marginBottom: '0.75rem', color: '#38bdf8', opacity: 0.8 }} />
+              <h3 style={{ margin: '0 0 0.5rem 0', color: '#f8fafc', fontSize: '1.1rem' }}>Mobile Circuit Scanner</h3>
+              <p style={{ margin: 0, fontSize: '0.82rem', maxWidth: '280px', lineHeight: 1.4, color: '#94a3b8' }}>
+                Use rear camera or upload a photo of your breadboard circuit to run AI component detection.
               </p>
             </div>
           )}
 
-          {status === 'requesting' && (
-            <div style={{ position: 'absolute', textAlign: 'center', color: '#38bdf8' }}>
-              <RefreshCw size={36} className="spin" style={{ marginBottom: '0.5rem' }} />
-              <div>Requesting Camera Access...</div>
+          {/* Loading Indicator */}
+          {status === 'analyzing' && (
+            <div style={{ position: 'absolute', inset: 0, background: 'rgba(2, 6, 23, 0.88)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#38bdf8', gap: '0.75rem' }}>
+              <RefreshCw size={38} className="spin" />
+              <div style={{ fontWeight: 700, fontSize: '1rem' }}>Running YOLO Neural Inference...</div>
+              <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Analyzing components & netlist topology</div>
             </div>
           )}
 
-          {status === 'connecting_webrtc' && (
-            <div style={{ position: 'absolute', top: '12px', left: '12px', background: 'rgba(15, 23, 42, 0.85)', color: '#fbbf24', padding: '0.4rem 0.8rem', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 600 }}>
-              🟡 Waiting for laptop peer to accept stream...
-            </div>
-          )}
-
-          {status === 'streaming' && (
-            <div style={{ position: 'absolute', top: '12px', left: '12px', background: 'rgba(6, 78, 59, 0.9)', color: '#6ee7b7', padding: '0.4rem 0.8rem', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981' }}></span>
-              LIVE STREAMING TO LAPTOP
-            </div>
-          )}
-
+          {/* Error Message Alert Banner */}
           {errorMessage && (
-            <div style={{ position: 'absolute', margin: '1rem', color: '#f87171', background: 'rgba(239, 68, 68, 0.15)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid #ef4444', fontSize: '0.85rem', textAlign: 'center' }}>
+            <div style={{ position: 'absolute', margin: '1rem', color: '#f87171', background: 'rgba(239, 68, 68, 0.18)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid #ef4444', fontSize: '0.82rem', textAlign: 'center' }}>
               ⚠️ {errorMessage}
             </div>
           )}
         </div>
 
-        {/* Action Controls */}
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          {status === 'idle' || status === 'error' ? (
+        {/* Primary Action Button Controls */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button
               onClick={startPhoneCamera}
               style={{
                 flex: 1,
+                background: status === 'streaming' ? '#0284c7' : '#1e293b',
+                color: '#fff',
+                border: '1px solid #334155',
+                borderRadius: '8px',
+                padding: '0.75rem',
+                fontSize: '0.9rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.4rem'
+              }}
+            >
+              <Camera size={18} /> {status === 'streaming' ? 'RESTART' : 'START CAMERA'}
+            </button>
+
+            {status === 'streaming' && (
+              <button
+                onClick={capturePhotoFromStream}
+                style={{
+                  flex: 1,
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '0.75rem',
+                  fontSize: '0.9rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.4rem',
+                  boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
+                }}
+              >
+                <Camera size={18} /> CAPTURE PHOTO
+              </button>
+            )}
+
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                flex: 1,
+                background: '#1e293b',
+                color: '#f8fafc',
+                border: '1px solid #334155',
+                borderRadius: '8px',
+                padding: '0.75rem',
+                fontSize: '0.9rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.4rem'
+              }}
+            >
+              <Upload size={18} /> UPLOAD PHOTO
+            </button>
+          </div>
+
+          {/* Analyze Circuit Button */}
+          {capturedImage && status !== 'analyzing' && (
+            <button
+              onClick={analyzeCapturedCircuit}
+              style={{
+                width: '100%',
                 background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
                 color: '#fff',
                 border: 'none',
                 borderRadius: '10px',
-                padding: '0.85rem',
+                padding: '0.9rem',
                 fontSize: '1rem',
                 fontWeight: 700,
                 cursor: 'pointer',
@@ -322,39 +486,116 @@ export default function PhoneCamera() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '0.5rem',
-                boxShadow: '0 4px 12px rgba(37, 99, 235, 0.4)'
+                boxShadow: '0 4px 14px rgba(37, 99, 235, 0.4)'
               }}
             >
-              <Camera size={20} /> ENABLE REAR CAMERA
-            </button>
-          ) : (
-            <button
-              onClick={stopPhoneStream}
-              style={{
-                flex: 1,
-                background: '#dc2626',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '10px',
-                padding: '0.85rem',
-                fontSize: '1rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '0.5rem'
-              }}
-            >
-              <CameraOff size={20} /> STOP STREAMING
+              <Sparkles size={20} /> ANALYZE CIRCUIT WITH AI
             </button>
           )}
         </div>
 
+        {/* PART 13 — AI ANALYSIS RESULT CARD */}
+        {status === 'complete' && analysisResult && (
+          <div style={{
+            background: '#0f172a',
+            border: '1px solid #38bdf8',
+            borderRadius: '12px',
+            padding: '1.25rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1rem'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#38bdf8', fontWeight: 700, fontSize: '1.05rem' }}>
+              <CheckCircle2 size={22} style={{ color: '#10b981' }} />
+              AI Analysis Complete
+            </div>
+
+            <div>
+              <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.5rem', fontWeight: 600 }}>DETECTED COMPONENTS:</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', fontSize: '0.82rem' }}>
+                <div style={{ background: '#1e293b', padding: '0.4rem 0.6rem', borderRadius: '6px' }}>Resistor: <strong style={{ color: '#f97316' }}>{counts.resistor || 0}</strong></div>
+                <div style={{ background: '#1e293b', padding: '0.4rem 0.6rem', borderRadius: '6px' }}>LED: <strong style={{ color: '#22c55e' }}>{counts.led || 0}</strong></div>
+                <div style={{ background: '#1e293b', padding: '0.4rem 0.6rem', borderRadius: '6px' }}>Capacitor: <strong style={{ color: '#3b82f6' }}>{counts.capacitor || 0}</strong></div>
+                <div style={{ background: '#1e293b', padding: '0.4rem 0.6rem', borderRadius: '6px' }}>Diode: <strong style={{ color: '#d946ef' }}>{counts.diode_rectifier || 0}</strong></div>
+                <div style={{ background: '#1e293b', padding: '0.4rem 0.6rem', borderRadius: '6px' }}>Wire: <strong style={{ color: '#38bdf8' }}>{counts.wire || 0}</strong></div>
+                <div style={{ background: '#1e293b', padding: '0.4rem 0.6rem', borderRadius: '6px' }}>IC Chip: <strong style={{ color: '#eab308' }}>{counts.ic_chip || 0}</strong></div>
+              </div>
+            </div>
+
+            <div style={{ fontSize: '0.82rem', background: '#1e293b', padding: '0.5rem 0.75rem', borderRadius: '6px', display: 'flex', justifyContent: 'space-between' }}>
+              <span>Reconstructed Net Nodes:</span>
+              <strong style={{ color: '#38bdf8' }}>{analysisResult.netlist?.nodes?.length || analysisResult.nets_summary?.length || 0} Nodes</strong>
+            </div>
+
+            {/* Navigation Action Buttons */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
+              <button
+                onClick={() => navigate('/scanner')}
+                style={{
+                  background: '#2563eb',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '0.75rem',
+                  fontWeight: 700,
+                  fontSize: '0.9rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                <Eye size={18} /> VIEW CIRCUIT DETAILS
+              </button>
+
+              <button
+                onClick={() => navigate('/simulator')}
+                style={{
+                  background: '#059669',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '0.75rem',
+                  fontWeight: 700,
+                  fontSize: '0.9rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                <Box size={18} /> OPEN 3D SIMULATOR
+              </button>
+
+              <button
+                onClick={() => navigate('/scanner')}
+                style={{
+                  background: '#1e293b',
+                  color: '#94a3b8',
+                  border: '1px solid #334155',
+                  borderRadius: '8px',
+                  padding: '0.6rem',
+                  fontWeight: 600,
+                  fontSize: '0.82rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.4rem'
+                }}
+              >
+                BACK TO SCANNER
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Info Banner */}
         <div style={{ fontSize: '0.78rem', color: '#64748b', textAlign: 'center', lineHeight: 1.4, padding: '0.5rem' }}>
           <ShieldCheck size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle', color: '#38bdf8' }} />
-          Point phone camera steadily at your physical breadboard. The laptop workstation handles all AI detection & 3D simulation.
+          FastAPI backend running at <code style={{ color: '#38bdf8' }}>{API_BASE_URL}</code> performs trained YOLO component detection & netlist reconstruction.
         </div>
       </main>
     </div>

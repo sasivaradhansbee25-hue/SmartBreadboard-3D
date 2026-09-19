@@ -41,7 +41,11 @@ class ComponentMeasurement:
     voltage_drop: float
     current: float  # In Amperes (positive from node1 to node2)
     power: float    # In Watts
-    state: Optional[str] = None  # e.g., 'ON', 'OFF', 'CHARGING', 'DISCHARGING'
+    state: Optional[str] = None  # e.g., 'ON', 'OFF', 'REVERSE', 'UNKNOWN', 'CHARGED'
+    direction: str = "unknown"   # 'pin1_to_pin2', 'pin2_to_pin1', 'none', 'unknown'
+    forward_voltage: Optional[float] = None
+    charge: Optional[float] = None
+    voltage_difference: Optional[float] = None
     value_source: str = "detected"
 
 @dataclass
