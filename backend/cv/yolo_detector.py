@@ -260,11 +260,13 @@ CLASS_COLORS = {
 
 def detect_and_annotate_components(image_input: bytes | str, conf_threshold: float = 0.45) -> dict:
     """
-    Executes YOLO 6-class detection, generates annotated overlay image with visual bounding boxes,
-    and runs breadboard grid hole mapping & electrical netlist generation.
-    Returns structured detection list, class counts, mapped components, and netlist.
+    Executes YOLO 6-class detection, runs Circuit Vision Verification & False-Positive Rejection Agent (Phase 18),
+    generates annotated overlay image with visual bounding boxes,
+    and runs breadboard grid hole mapping & electrical netlist generation for VERIFIED components.
+    Routes UNKNOWN components to Phase 17 manual recovery and completely excludes REJECTED candidates.
     """
     from core.circuit_model import build_netlist_from_detections
+    from cv.circuit_vision_verifier import verify_circuit_vision_candidates
 
     try:
         if isinstance(image_input, str):
@@ -286,12 +288,19 @@ def detect_and_annotate_components(image_input: bytes | str, conf_threshold: flo
                 "mapped_components": [],
                 "netlist": None,
                 "nets_summary": [],
-                "annotated_image": None
+                "annotated_image": None,
+                "vision_verification": {
+                    "raw_count": 0,
+                    "verified_count": 0,
+                    "unknown_count": 0,
+                    "rejected_count": 0,
+                    "rejection_details": []
+                }
             }
 
         img_h, img_w = cv_img.shape[:2]
 
-        # Step 1: Run detection
+        # Step 1: Run raw YOLO detection
         det_output = detect_components_yolo(cv_img, conf_threshold=conf_threshold)
         raw_detections = det_output.get("detections", [])
 
@@ -310,6 +319,7 @@ def detect_and_annotate_components(image_input: bytes | str, conf_threshold: flo
 
             formatted_detections.append({
                 "id": d.get("id"),
+                "detection_id": d.get("id"),
                 "class_id": cls_id,
                 "class_name": cls_name,
                 "class": cls_name,
@@ -319,10 +329,45 @@ def detect_and_annotate_components(image_input: bytes | str, conf_threshold: flo
                 "crop_base64": d.get("crop_base64")
             })
 
-        # Step 2: Generate netlist & hole mapping
-        netlist = build_netlist_from_detections(formatted_detections, img_w=img_w, img_h=img_h)
-        mapped_components = netlist.get("components", [])
+        # Step 2: Circuit Vision Verification Agent (Phase 18)
+        verification_result = verify_circuit_vision_candidates(
+            raw_detections=formatted_detections,
+            img_w=img_w,
+            img_h=img_h
+        )
+
+        verified_candidates = verification_result.get("verified", [])
+        unknown_candidates = verification_result.get("unknown", [])
+        rejected_candidates = verification_result.get("rejected", [])
+        all_candidates = verification_result.get("all_candidates", [])
+
+        # Step 3: Generate electrical netlist & hole mapping ONLY for VERIFIED components
+        netlist = build_netlist_from_detections(verified_candidates, img_w=img_w, img_h=img_h)
+        mapped_components = list(netlist.get("components", []))
         nets_summary = netlist.get("nets_summary", [])
+
+        # Step 3b: Append UNKNOWN components to mapped_components for Phase 17 Manual Recovery
+        for unk in unknown_candidates:
+            lead_info = unk.get("lead_info", {})
+            mapped_components.append({
+                "id": unk.get("id"),
+                "designator": f"UNK_{unk.get('id')}",
+                "type": "unknown",
+                "predicted_type": unk.get("class", "resistor"),
+                "source": "unknown",
+                "needs_manual_recovery": True,
+                "verification": "UNKNOWN",
+                "bbox": unk.get("bbox"),
+                "start_hole": unk.get("hole1", "A1"),
+                "end_hole": unk.get("hole2", "A2"),
+                "hole1": unk.get("hole1", "A1"),
+                "hole2": unk.get("hole2", "A2"),
+                "confidence": unk.get("confidence", 0.40),
+                "mapping_confidence": unk.get("mapping_confidence", 0.0),
+                "is_uncertain": True,
+                "verification_score": unk.get("verification_score", 0.0),
+                "reasons": unk.get("reasons", [])
+            })
 
         # Run real MNA Electrical Solver
         from circuit_solver.dc_solver import run_dc_analysis
@@ -333,7 +378,7 @@ def detect_and_annotate_components(image_input: bytes | str, conf_threshold: flo
         netlist["electrical_analysis"] = formatted_sim
         netlist["simulationResult"] = formatted_sim
 
-        # Step 3: Draw comprehensive Visual Debug Overlay (Bboxes, Centers, Terminals, Mapped Holes)
+        # Step 4: Draw Visual Overlay for Verified and Unknown components
         for comp in mapped_components:
             cls_name = comp.get("type", "resistor")
             des = comp.get("designator", "COMP")
@@ -343,11 +388,18 @@ def detect_and_annotate_components(image_input: bytes | str, conf_threshold: flo
             h2 = comp.get("end_hole", "A2")
 
             x1, y1, x2, y2 = bbox
-            color = CLASS_COLORS.get(cls_name, (0, 255, 0))
+            is_unknown = comp.get("source") == "unknown" or comp.get("verification") == "UNKNOWN"
+
+            if is_unknown:
+                color = (0, 215, 255) # Yellow/Gold for Unknown
+                label = f"{des} (UNKNOWN - MANUAL RECOVERY)"
+            else:
+                color = CLASS_COLORS.get(cls_name, (0, 255, 0))
+                label = f"{des}: {cls_name} {conf:.2f}"
 
             # 1. Bounding box
             cv2.rectangle(annotated_img, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(annotated_img, f"{des}: {cls_name} {conf:.2f}", (x1, max(18, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+            cv2.putText(annotated_img, label, (x1, max(18, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.50, color, 2)
 
             # 2. Component Center
             cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
@@ -390,6 +442,16 @@ def detect_and_annotate_components(image_input: bytes | str, conf_threshold: flo
             "image_meta": {
                 "width": img_w,
                 "height": img_h
+            },
+            "vision_verification": {
+                "raw_count": verification_result.get("raw_yolo_count", len(formatted_detections)),
+                "verified_count": verification_result.get("verified_count", len(verified_candidates)),
+                "unknown_count": verification_result.get("unknown_count", len(unknown_candidates)),
+                "rejected_count": verification_result.get("rejected_count", len(rejected_candidates)),
+                "verified": verified_candidates,
+                "unknown": unknown_candidates,
+                "rejected": rejected_candidates,
+                "all_candidates": all_candidates
             }
         }
 

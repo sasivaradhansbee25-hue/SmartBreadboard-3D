@@ -290,6 +290,7 @@ def analyze_camera_frame(req: CameraFrameRequest):
         "digital_twin": digital_twin,
         "registration": registration,
         "annotated_image": api_res.get("annotated_image"),
+        "vision_verification": api_res.get("vision_verification", {}),
         "tracking_summary": {
             "detected_count": detected_count,
             "tracked_count": tracked_count,

@@ -90,6 +90,10 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
     comp_counter = 1
 
     for d in detections:
+        # Phase 18 Circuit Vision Safety Gate: strictly exclude REJECTED or duplicate candidates
+        if d.get("verification") == "REJECTED" or d.get("is_duplicate"):
+            continue
+
         # Standardize class name
         c_type = d.get("class") or d.get("class_name") or "resistor"
         c_type_lower = c_type.lower()

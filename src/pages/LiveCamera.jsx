@@ -15,7 +15,7 @@ import UserCorrectionModal from '../components/UserCorrectionModal';
 import ARCameraOverlay from '../components/ARCameraOverlay';
 import DigitalChangeConfirmModal from '../components/DigitalChangeConfirmModal';
 import WhatIfComparisonModal from '../components/WhatIfComparisonModal';
-import { Camera, CameraOff, RefreshCw, Zap, Layers, Smartphone, Monitor, QrCode, Wifi, CheckCircle2, Download, Upload, Sparkles } from 'lucide-react';
+import { Camera, CameraOff, RefreshCw, Zap, Layers, Smartphone, Monitor, QrCode, Wifi, CheckCircle2, Download, Upload, Sparkles, ShieldCheck } from 'lucide-react';
 
 export default function LiveCamera() {
   const {
@@ -69,6 +69,17 @@ export default function LiveCamera() {
   const [latestToast, setLatestToast] = useState(null);
   const [previousState, setPreviousState] = useState(null);
   const [detections, setDetections] = useState([]);
+  const [visionVerification, setVisionVerification] = useState({
+    raw_count: 0,
+    verified_count: 0,
+    unknown_count: 0,
+    rejected_count: 0,
+    verified: [],
+    unknown: [],
+    rejected: [],
+    all_candidates: []
+  });
+  const [showVisionDebug, setShowVisionDebug] = useState(false);
 
   // Live Tracking Metrics State
   const [trackingMetrics, setTrackingMetrics] = useState({
@@ -565,6 +576,10 @@ export default function LiveCamera() {
           backendConnected: true
         });
 
+        if (res.vision_verification) {
+          setVisionVerification(res.vision_verification);
+        }
+
         setDetections(res.mapped_components || res.detections || []);
         drawOverlayDetections(res.mapped_components || res.detections || []);
         setRegistration(res.registration || null);
@@ -979,6 +994,117 @@ export default function LiveCamera() {
           <span>Latency: <strong style={{ color: '#a78bfa' }}>{trackingMetrics.latency} ms</strong></span>
         </div>
       </div>
+
+      {/* Vision Verification HUD (Phase 18 Technical Rejection Layer) */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '0.6rem',
+        background: 'rgba(15, 23, 42, 0.90)',
+        padding: '0.45rem 0.9rem',
+        borderRadius: '6px',
+        border: '1px solid rgba(168, 85, 247, 0.25)',
+        marginBottom: '1rem',
+        fontSize: '0.80rem'
+      }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, color: '#c084fc', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            <ShieldCheck size={14} /> VISION VERIFIER:
+          </span>
+          <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', background: '#1e293b', color: '#94a3b8' }}>
+            RAW <strong>{visionVerification.raw_count}</strong>
+          </span>
+          <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }}>
+            VERIFIED <strong>{visionVerification.verified_count}</strong>
+          </span>
+          <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24' }}>
+            UNKNOWN <strong>{visionVerification.unknown_count}</strong>
+          </span>
+          <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171' }}>
+            REJECTED <strong>{visionVerification.rejected_count}</strong>
+          </span>
+        </div>
+
+        <button
+          onClick={() => setShowVisionDebug(prev => !prev)}
+          style={{
+            background: showVisionDebug ? '#7c3aed' : '#334155',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '4px',
+            padding: '0.25rem 0.6rem',
+            fontSize: '0.75rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.3rem'
+          }}
+        >
+          {showVisionDebug ? 'Hide Rejection Diagnostics' : 'Inspect Rejection Reasons'}
+        </button>
+      </div>
+
+      {/* Expandable Rejection Diagnostics Panel */}
+      {showVisionDebug && (
+        <div style={{
+          background: '#0b0f19',
+          border: '1px solid #4c1d95',
+          borderRadius: '8px',
+          padding: '0.75rem 1rem',
+          marginBottom: '1rem',
+          fontSize: '0.78rem',
+          maxHeight: '220px',
+          overflowY: 'auto'
+        }}>
+          <div style={{ fontWeight: 700, color: '#e0e7ff', marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between' }}>
+            <span>Candidate Lifecycle & Verification Audit</span>
+            <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>Phase 18 Decision Engine</span>
+          </div>
+          {visionVerification.all_candidates && visionVerification.all_candidates.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              {visionVerification.all_candidates.map((cand, idx) => {
+                const vState = cand.verification;
+                const badgeColor = vState === 'VERIFIED' ? '#34d399' : vState === 'UNKNOWN' ? '#fbbf24' : '#f87171';
+                const badgeBg = vState === 'VERIFIED' ? 'rgba(16, 185, 129, 0.15)' : vState === 'UNKNOWN' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)';
+                return (
+                  <div key={cand.detection_id || idx} style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    background: '#131b2e',
+                    padding: '0.35rem 0.6rem',
+                    borderRadius: '4px',
+                    borderLeft: `3px solid ${badgeColor}`
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <strong style={{ color: '#e2e8f0' }}>{cand.detection_id || cand.id}</strong>
+                      <span style={{ color: '#94a3b8' }}>{cand.class} (conf: {Math.round((cand.confidence || 0) * 100)}%)</span>
+                      <span style={{
+                        padding: '0.1rem 0.4rem',
+                        borderRadius: '3px',
+                        fontSize: '0.70rem',
+                        fontWeight: 700,
+                        background: badgeBg,
+                        color: badgeColor
+                      }}>
+                        {vState}
+                      </span>
+                    </div>
+                    <div style={{ color: '#94a3b8', fontSize: '0.72rem', maxWidth: '50%', textAlign: 'right' }}>
+                      reasons: <span style={{ color: '#cbd5e1' }}>{(cand.reasons || []).join(', ')}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ color: '#64748b', fontStyle: 'italic' }}>No candidate detections in current frame buffer.</div>
+          )}
+        </div>
+      )}
 
       {/* Main Split Grid (Live Camera | 3D Digital Twin) */}
       <div style={{
