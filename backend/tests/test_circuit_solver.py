@@ -170,8 +170,9 @@ def test_9_current_direction_reversal():
     res = run_dc_analysis(netlist)
     assert res.success is True
     r1_meas = res.measurements["R1"]
-    assert r1_meas.current < 0  # Reversely polarized current
-    assert is_approx(r1_meas.current, -0.012)
+    assert r1_meas.direction == "pin2_to_pin1"
+    assert is_approx(r1_meas.current, 0.012)
+
 
 
 def test_10_zero_current_circuit():

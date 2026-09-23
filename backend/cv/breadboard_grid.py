@@ -8,6 +8,7 @@ Includes orientation-aware terminal estimation and boundary uncertainty validati
 import cv2
 import numpy as np
 import math
+import re
 from typing import List, Tuple, Dict, Any, Union, Optional
 
 # Canonical 830 Tie-Point Breadboard Physical Geometry (900 x 270 mm/px Reference)

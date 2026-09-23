@@ -4,6 +4,7 @@ import { useCircuit } from '../context/CircuitContext';
 import { requestLiveCameraAnalysis } from '../services/analysisService';
 import { API_BASE_URL, FRONTEND_BASE_URL, WS_BASE_URL } from '../services/api';
 import { getIceServers } from '../config/webrtc';
+import { computeCircuitSignature, hasCircuitTopologyChanged } from '../utils/circuitSignature';
 import Breadboard3DCanvas from '../components/Breadboard3DCanvas';
 import ComponentMeasurementCard from '../components/ComponentMeasurementCard';
 import PowerSourcePanel from '../components/PowerSourcePanel';
@@ -75,6 +76,29 @@ export default function LiveCamera() {
   });
 
   const [registration, setRegistration] = useState(null);
+  const [renderFps, setRenderFps] = useState(60);
+  const frameCountRef = useRef(0);
+  const lastFpsTimeRef = useRef(typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const rafIdRef = useRef(null);
+
+  // Fast Visual Tracking Loop (rAF for render FPS and visual synchronization)
+  useEffect(() => {
+    const measureRenderLoop = () => {
+      frameCountRef.current += 1;
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      if (now - lastFpsTimeRef.current >= 500) {
+        const calculated = Math.round((frameCountRef.current * 1000) / (now - lastFpsTimeRef.current));
+        setRenderFps(Math.min(Math.max(calculated, 1), 120));
+        frameCountRef.current = 0;
+        lastFpsTimeRef.current = now;
+      }
+      rafIdRef.current = requestAnimationFrame(measureRenderLoop);
+    };
+    rafIdRef.current = requestAnimationFrame(measureRenderLoop);
+    return () => {
+      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
+    };
+  }, []);
 
   // Modals & Digital Lab State
   const [valueModalComp, setValueModalComp] = useState(null);
@@ -815,51 +839,137 @@ export default function LiveCamera() {
         </div>
       )}
 
-      {/* Live Tracking Status Bar */}
+      {/* Live Status HUD (Phase 16 Technical Indicator) */}
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
         flexWrap: 'wrap',
         gap: '0.75rem',
-        background: 'rgba(15, 23, 42, 0.85)',
-        padding: '0.6rem 1rem',
+        background: 'rgba(15, 23, 42, 0.95)',
+        padding: '0.65rem 1.1rem',
         borderRadius: '8px',
-        border: '1px solid rgba(255, 255, 255, 0.08)',
+        border: '1px solid rgba(56, 189, 248, 0.25)',
         marginBottom: '1rem',
-        fontSize: '0.82rem'
+        fontSize: '0.82rem',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.3)'
       }}>
-        {/* Connection States */}
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <span style={{ color: '#94a3b8' }}>Camera:</span>
-            <strong style={{ color: cameraActive ? '#10b981' : '#f59e0b' }}>
-              ● {cameraActive ? 'ACTIVE' : 'STANDBY'}
-            </strong>
+        {/* Phase 16 Required Indicators */}
+        <div style={{ display: 'flex', gap: '0.85rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* PHONE */}
+          <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.35rem',
+            padding: '0.2rem 0.55rem',
+            borderRadius: '4px',
+            background: phoneConnected ? 'rgba(16, 185, 129, 0.15)' : 'rgba(148, 163, 184, 0.1)',
+            color: phoneConnected ? '#34d399' : '#94a3b8',
+            fontWeight: 700,
+            fontSize: '0.75rem'
+          }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: phoneConnected ? '#10b981' : '#64748b' }} />
+            PHONE: {phoneConnected ? 'CONNECTED' : (cameraSource === 'laptop' ? 'LAPTOP CAM' : 'DISCONNECTED')}
           </span>
 
-          <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <span style={{ color: '#94a3b8' }}>Backend:</span>
-            <strong style={{ color: trackingMetrics.backendConnected ? '#10b981' : '#ef4444' }}>
-              ● {trackingMetrics.backendConnected ? 'CONNECTED' : 'DISCONNECTED'}
-            </strong>
+          {/* TRACKING */}
+          {(() => {
+            const isLost = trackingMetrics.lost > 0 && trackingMetrics.tracked === 0;
+            const isReacquiring = trackingMetrics.lost > 0 && trackingMetrics.tracked > 0;
+            const isTracked = (cameraActive || isDemoMode) && !isLost;
+            const trackingColor = isLost ? '#ef4444' : isReacquiring ? '#f59e0b' : isTracked ? '#10b981' : '#64748b';
+            const trackingLabel = isLost ? 'LOST' : isReacquiring ? 'REACQUIRING' : isTracked ? 'TRACKED' : 'STANDBY';
+            return (
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                padding: '0.2rem 0.55rem',
+                borderRadius: '4px',
+                background: `${trackingColor}22`,
+                color: trackingColor,
+                fontWeight: 700,
+                fontSize: '0.75rem'
+              }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: trackingColor }} />
+                TRACKING: {trackingLabel}
+              </span>
+            );
+          })()}
+
+          {/* AI */}
+          <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.35rem',
+            padding: '0.2rem 0.55rem',
+            borderRadius: '4px',
+            background: isAnalyzing ? 'rgba(56, 189, 248, 0.2)' : 'rgba(16, 185, 129, 0.15)',
+            color: isAnalyzing ? '#38bdf8' : '#34d399',
+            fontWeight: 700,
+            fontSize: '0.75rem'
+          }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: isAnalyzing ? '#38bdf8' : '#10b981' }} />
+            AI: {isAnalyzing ? 'ANALYZING' : 'READY'}
           </span>
 
-          <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <span style={{ color: '#94a3b8' }}>Tracking:</span>
-            <strong style={{ color: cameraActive && !isAnalyzing ? '#10b981' : (isAnalyzing ? '#38bdf8' : '#64748b') }}>
-              ● {cameraActive ? (isAnalyzing ? 'PROCESSING' : 'ACTIVE') : 'IDLE'}
-            </strong>
-          </span>
+          {/* CIRCUIT */}
+          {(() => {
+            const isInvalid = activeCircuit?.validity?.status === 'INVALID';
+            const isChanged = scanStatus === 'desynced';
+            const circuitColor = isInvalid ? '#ef4444' : isChanged ? '#f59e0b' : '#10b981';
+            const circuitLabel = isInvalid ? 'INVALID' : isChanged ? 'CHANGED' : 'SYNCED';
+            return (
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                padding: '0.2rem 0.55rem',
+                borderRadius: '4px',
+                background: `${circuitColor}22`,
+                color: circuitColor,
+                fontWeight: 700,
+                fontSize: '0.75rem'
+              }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: circuitColor }} />
+                CIRCUIT: {circuitLabel}
+              </span>
+            );
+          })()}
+
+          {/* SIMULATION */}
+          {(() => {
+            const isSolved = solverStatus === 'SOLVED';
+            const isUnpowered = solverStatus === 'NOT_RUN' || solverStatus === 'POWER_REQUIRED';
+            const simColor = isSolved ? '#10b981' : isUnpowered ? '#f59e0b' : '#ef4444';
+            const simLabel = isSolved ? 'SOLVED' : isUnpowered ? 'NOT_RUN' : 'FAULT';
+            return (
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                padding: '0.2rem 0.55rem',
+                borderRadius: '4px',
+                background: `${simColor}22`,
+                color: simColor,
+                fontWeight: 700,
+                fontSize: '0.75rem'
+              }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: simColor }} />
+                ⚡ SIMULATION: {simLabel}
+              </span>
+            );
+          })()}
         </div>
 
-        {/* Dynamic Counters & Performance */}
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* Live Performance & Real Measured FPS */}
+        <div style={{ display: 'flex', gap: '0.85rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <span>Detected: <strong style={{ color: '#38bdf8' }}>{trackingMetrics.detected}</strong></span>
           <span>Tracked: <strong style={{ color: '#10b981' }}>{trackingMetrics.tracked}</strong></span>
           <span>Lost: <strong style={{ color: trackingMetrics.lost > 0 ? '#ef4444' : '#94a3b8' }}>{trackingMetrics.lost}</strong></span>
           <span style={{ color: 'rgba(255,255,255,0.2)' }}>|</span>
-          <span>FPS: <strong style={{ color: '#fbbf24' }}>{cameraActive ? trackingMetrics.fps : 0}</strong></span>
+          <span>AI Rate: <strong style={{ color: '#38bdf8' }}>{cameraActive ? `${trackingMetrics.fps} FPS` : '0 FPS'}</strong></span>
+          <span>Render: <strong style={{ color: '#fbbf24' }}>{renderFps} FPS</strong></span>
           <span>Latency: <strong style={{ color: '#a78bfa' }}>{trackingMetrics.latency} ms</strong></span>
         </div>
       </div>
