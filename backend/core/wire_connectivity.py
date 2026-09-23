@@ -71,11 +71,22 @@ class DisjointSetUnion:
         root_i = self.find(i)
         root_j = self.find(j)
         if root_i != root_j:
-            # Deterministic root selection (alphabetical string sort)
-            if root_i < root_j:
+            # Power rails take highest priority as canonical DSU root
+            is_pwr_i = "POWER_VCC" in root_i
+            is_gnd_i = "GROUND" in root_i
+            is_pwr_j = "POWER_VCC" in root_j
+            is_gnd_j = "GROUND" in root_j
+
+            if (is_pwr_i or is_gnd_i) and not (is_pwr_j or is_gnd_j):
                 self.parent[root_j] = root_i
-            else:
+            elif (is_pwr_j or is_gnd_j) and not (is_pwr_i or is_gnd_i):
                 self.parent[root_i] = root_j
+            else:
+                # Deterministic root selection (alphabetical string sort)
+                if root_i < root_j:
+                    self.parent[root_j] = root_i
+                else:
+                    self.parent[root_i] = root_j
 
 def build_electrical_connectivity(components: List[Dict[str, Any]], breadboard_holes: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
@@ -134,13 +145,20 @@ def build_electrical_connectivity(components: List[Dict[str, Any]], breadboard_h
     # 2. Assign deterministic Net IDs to DSU roots
     all_roots = sorted(list(set(dsu.find(node) for node in dsu.parent.keys())))
 
+    # Group member nodes by their resolved root
+    root_members: Dict[str, Set[str]] = {}
+    for node in dsu.parent.keys():
+        r = dsu.find(node)
+        root_members.setdefault(r, set()).add(node)
+
     root_to_net_id = {}
     net_counter = 1
 
     for root in all_roots:
-        if "POWER_VCC" in root:
+        members = root_members.get(root, {root})
+        if any("POWER_VCC" in m for m in members):
             root_to_net_id[root] = "NET_VCC (+5V)"
-        elif "GROUND" in root:
+        elif any("GROUND" in m for m in members):
             root_to_net_id[root] = "NET_GND (0V)"
         else:
             root_to_net_id[root] = f"NET{net_counter}"

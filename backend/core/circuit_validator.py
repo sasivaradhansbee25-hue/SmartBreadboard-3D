@@ -348,9 +348,18 @@ def validate_circuit(netlist: Dict[str, Any]) -> Dict[str, Any]:
         solver_status = "NOT_RUN"
         solver_reason = f"Circuit validation failed with status {status}"
 
+    # 7. Map to standardized NETLIST_VALID / NETLIST_WARNING / NETLIST_INVALID
+    if status == "VALID":
+        netlist_status = "NETLIST_VALID"
+    elif status == "WARNING":
+        netlist_status = "NETLIST_WARNING"
+    else:
+        netlist_status = "NETLIST_INVALID"
+
     return {
         "valid": valid,
         "status": status,
+        "netlist_status": netlist_status,
         "errors": errors,
         "warnings": warnings,
         "checks": {

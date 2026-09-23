@@ -232,36 +232,65 @@ export default function Scanner() {
         )}
       </div>
 
-      {/* Step 7: Visual Debug Pipeline Monitor */}
+      {/* Phase 10: Full AI & Electrical Simulation Pipeline Review Monitor */}
       <div className="card" style={{ marginBottom: '1.25rem', padding: '1rem 1.25rem', background: 'rgba(15, 23, 42, 0.95)', border: '1px solid var(--accent-cyan)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Sparkles size={18} style={{ color: 'var(--accent-cyan)' }} />
             <h3 style={{ fontSize: '0.95rem', fontWeight: '700', color: '#fff', margin: 0 }}>
-              Step 7 — Visual Debug Pipeline Monitor
+              End-to-End Pipeline Monitor & Diagnostic Review
             </h3>
           </div>
-          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-            <span className="code-pill" style={{ borderColor: 'var(--accent-cyan)', color: 'var(--accent-cyan)' }}>
-              YOLO detections: {detections.length}
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Pipeline Stage Indicators */}
+            <span className="code-pill" style={{ borderColor: detections.length > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)', color: detections.length > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
+              YOLO {detections.length > 0 ? '✓' : '—'}
             </span>
-            <span className="code-pill" style={{ borderColor: 'var(--accent-cyan)', color: 'var(--accent-cyan)' }}>
-              Mapped components: {mappedComponents.length}
+            <span className="code-pill" style={{ borderColor: mappedComponents.length > 0 ? (mappedComponents.some(c => c.is_uncertain || c.uncertain_mapping) ? 'var(--accent-amber)' : 'var(--accent-emerald)') : 'var(--text-muted)', color: mappedComponents.length > 0 ? (mappedComponents.some(c => c.is_uncertain || c.uncertain_mapping) ? 'var(--accent-amber)' : 'var(--accent-emerald)') : 'var(--text-muted)' }}>
+              MAPPING {mappedComponents.length > 0 ? (mappedComponents.some(c => c.is_uncertain || c.uncertain_mapping) ? '⚠' : '✓') : '—'}
             </span>
-            <span className="code-pill" style={{ borderColor: 'var(--accent-cyan)', color: 'var(--accent-cyan)' }}>
-              Netlist components: {activeCircuit?.components?.length || 0}
+            <span className="code-pill" style={{ borderColor: netsSummary.length > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)', color: netsSummary.length > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
+              WIRE NETS {netsSummary.length > 0 ? '✓' : '—'}
             </span>
-            <span className="code-pill" style={{ borderColor: 'var(--accent-emerald)', color: 'var(--accent-emerald)' }}>
-              3D components: {activeCircuit?.components?.length || 0}
+            <span className="code-pill" style={{ 
+              borderColor: activeCircuit?.validity?.netlist_status === 'NETLIST_VALID' ? 'var(--accent-emerald)' : (activeCircuit?.validity?.netlist_status === 'NETLIST_WARNING' ? 'var(--accent-amber)' : (activeCircuit?.validity?.netlist_status === 'NETLIST_INVALID' ? 'var(--accent-red)' : 'var(--text-muted)')),
+              color: activeCircuit?.validity?.netlist_status === 'NETLIST_VALID' ? 'var(--accent-emerald)' : (activeCircuit?.validity?.netlist_status === 'NETLIST_WARNING' ? 'var(--accent-amber)' : (activeCircuit?.validity?.netlist_status === 'NETLIST_INVALID' ? 'var(--accent-red)' : 'var(--text-muted)'))
+            }}>
+              NETLIST {activeCircuit?.validity?.netlist_status === 'NETLIST_VALID' ? '✓' : (activeCircuit?.validity?.netlist_status === 'NETLIST_WARNING' ? '⚠' : (activeCircuit?.validity?.netlist_status === 'NETLIST_INVALID' ? '✕' : '—'))}
+            </span>
+            <span className="code-pill" style={{ 
+              borderColor: activeCircuit?.solver_status === 'SOLVED' ? 'var(--accent-emerald)' : (activeCircuit?.solver_status === 'FAULT' ? 'var(--accent-red)' : 'var(--accent-cyan)'),
+              color: activeCircuit?.solver_status === 'SOLVED' ? 'var(--accent-emerald)' : (activeCircuit?.solver_status === 'FAULT' ? 'var(--accent-red)' : 'var(--accent-cyan)')
+            }}>
+              MNA {activeCircuit?.solver_status === 'SOLVED' ? '✓' : (activeCircuit?.solver_status ? '✕' : '—')}
+            </span>
+            <span className="code-pill" style={{ borderColor: mappedComponents.length > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)', color: mappedComponents.length > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
+              3D TWIN {mappedComponents.length > 0 ? '✓' : '—'}
+            </span>
+            <span className="code-pill" style={{ borderColor: activeCircuit?.solver_status === 'SOLVED' ? 'var(--accent-emerald)' : 'var(--text-muted)', color: activeCircuit?.solver_status === 'SOLVED' ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
+              ANIMATION {activeCircuit?.solver_status === 'SOLVED' ? '✓' : '—'}
             </span>
           </div>
         </div>
+
+        {/* Diagnostic reason text if warning or incomplete */}
+        {activeCircuit?.validity?.errors?.length > 0 && (
+          <div style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid var(--accent-red)', color: 'var(--accent-red)', fontSize: '0.8rem' }}>
+            <strong>Netlist Error:</strong> {activeCircuit.validity.errors.join("; ")}
+          </div>
+        )}
+        {activeCircuit?.solver_reason && activeCircuit?.solver_status !== 'SOLVED' && !activeCircuit?.validity?.errors?.length && (
+          <div style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(234, 179, 8, 0.12)', border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)', fontSize: '0.8rem' }}>
+            <strong>Simulation Status:</strong> {activeCircuit.solver_reason}
+          </div>
+        )}
 
         {/* Component breakdown list */}
         {mappedComponents.length > 0 ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.5rem' }}>
             {mappedComponents.map((comp, idx) => {
               const badge = CLASS_COLOR_BADGES[comp.type] || { border: '#fff', text: '#fff' };
+              const isUncertain = comp.uncertain_mapping || comp.is_uncertain;
               return (
                 <div 
                   key={comp.id || idx}
@@ -269,21 +298,22 @@ export default function Scanner() {
                     padding: '0.35rem 0.65rem',
                     borderRadius: '6px',
                     background: 'rgba(255, 255, 255, 0.04)',
-                    border: `1px solid ${badge.border}`,
+                    border: `1px solid ${isUncertain ? 'var(--accent-amber)' : badge.border}`,
                     fontSize: '0.8rem',
                     fontFamily: 'var(--font-mono)',
                     color: '#e2e8f0'
                   }}
                 >
-                  <strong style={{ color: badge.text }}>{comp.designator || `C${idx+1}`}</strong> - {comp.type} - {(comp.confidence * 100).toFixed(0)}% 
+                  <strong style={{ color: badge.text }}>{comp.designator || `C${idx+1}`}</strong> - {comp.type} - {((comp.mapping_confidence || comp.confidence) * 100).toFixed(0)}% 
                   <span style={{ color: 'var(--text-muted)', marginLeft: '0.35rem' }}>({comp.start_hole || comp.hole1} → {comp.end_hole || comp.hole2})</span>
+                  {isUncertain && <span style={{ color: 'var(--accent-amber)', marginLeft: '0.35rem' }}>⚠</span>}
                 </div>
               );
             })}
           </div>
         ) : (
           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Awaiting scan to monitor component flow through YOLO → Backend → Netlist → CircuitContext → 3D Mesh.
+            Awaiting scan to monitor component flow through YOLO → Grid Mapping → Wire Net Merging → Netlist Validation → MNA Simulation → 3D Digital Twin.
           </div>
         )}
       </div>
@@ -382,21 +412,26 @@ export default function Scanner() {
               Click "Analyze Real Image" to run YOLO detection and map leads to physical breadboard tie-points.
             </div>
           ) : (
-            <div style={{ overflowX: 'auto', maxHeight: '280px' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', textAlign: 'left' }}>
+            <div style={{ overflowX: 'auto', maxHeight: '320px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', textAlign: 'left' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
-                    <th style={{ padding: '0.5rem' }}>Designator</th>
+                    <th style={{ padding: '0.5rem' }}>Component</th>
                     <th style={{ padding: '0.5rem' }}>Type</th>
-                    <th style={{ padding: '0.5rem' }}>Start Hole</th>
-                    <th style={{ padding: '0.5rem' }}>End Hole</th>
-                    <th style={{ padding: '0.5rem' }}>Conf</th>
+                    <th style={{ padding: '0.5rem' }}>Terminals</th>
+                    <th style={{ padding: '0.5rem' }}>Confidence</th>
                     <th style={{ padding: '0.5rem' }}>Status</th>
+                    <th style={{ padding: '0.5rem' }}>Engineering Reason</th>
                   </tr>
                 </thead>
                 <tbody>
                   {mappedComponents.map((c, i) => {
                     const badgeMeta = CLASS_COLOR_BADGES[c.type] || { text: '#fff' };
+                    const isUncertain = c.uncertain_mapping || c.is_uncertain;
+                    const mapConfidence = c.mapping_confidence !== undefined ? c.mapping_confidence : c.confidence;
+                    const reasonText = c.reason || c.mapping_reason || (isUncertain ? 'Endpoint distance or connectivity requires review' : 'Hole mapping verified within grid tolerance');
+                    const isInvalid = c.start_hole === c.end_hole && c.type !== 'ic_chip';
+
                     return (
                       <tr key={c.id || i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                         <td style={{ padding: '0.5rem', fontWeight: '700', fontFamily: 'var(--font-mono)' }}>
@@ -406,24 +441,28 @@ export default function Scanner() {
                           {c.type}
                         </td>
                         <td style={{ padding: '0.5rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>
-                          {c.start_hole || c.hole1}
+                          {c.start_hole || c.hole1} → {c.end_hole || c.hole2}
                         </td>
-                        <td style={{ padding: '0.5rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>
-                          {c.end_hole || c.hole2}
-                        </td>
-                        <td style={{ padding: '0.5rem', fontFamily: 'var(--font-mono)', color: c.confidence >= 0.7 ? 'var(--accent-emerald)' : 'var(--accent-amber)' }}>
-                          {(c.confidence * 100).toFixed(0)}%
+                        <td style={{ padding: '0.5rem', fontFamily: 'var(--font-mono)', color: mapConfidence >= 0.8 ? 'var(--accent-emerald)' : (mapConfidence >= 0.6 ? 'var(--accent-amber)' : 'var(--accent-red)') }}>
+                          {(mapConfidence * 100).toFixed(0)}%
                         </td>
                         <td style={{ padding: '0.5rem' }}>
-                          {c.uncertain_mapping ? (
+                          {isInvalid ? (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--accent-red)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                              ✕ Invalid
+                            </span>
+                          ) : isUncertain ? (
                             <span style={{ fontSize: '0.75rem', color: 'var(--accent-amber)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                              <AlertTriangle size={12} /> Mapping Uncertain
+                              ⚠ Review
                             </span>
                           ) : (
                             <span style={{ fontSize: '0.75rem', color: 'var(--accent-emerald)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
                               <CheckCircle2 size={12} /> Verified
                             </span>
                           )}
+                        </td>
+                        <td style={{ padding: '0.5rem', fontSize: '0.75rem', color: isUncertain ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
+                          {reasonText}
                         </td>
                       </tr>
                     );
@@ -451,7 +490,7 @@ export default function Scanner() {
               No netlist generated yet. Run detection to synthesize electrical node connectivity.
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '280px', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '320px', overflowY: 'auto' }}>
               {netsSummary.map((netStr, idx) => {
                 const parts = netStr.split(':');
                 const netName = parts[0];

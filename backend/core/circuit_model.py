@@ -6,7 +6,7 @@ and constructs the Circuit Data Model JSON netlist per SPEC.md Section 9.
 
 import re
 from datetime import datetime
-from cv.breadboard_grid import extract_component_lead_positions
+from cv.breadboard_grid import extract_component_lead_positions, extract_component_lead_positions_verbose
 from cv.value_consensus import extract_value_consensus_from_crop, build_fallback_response
 from core.wire_connectivity import build_electrical_connectivity, get_base_node_for_hole
 from core.circuit_validator import validate_circuit
@@ -123,9 +123,16 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
             hole2 = d["hole2"]
             map_conf = d.get("mapping_confidence", 0.90)
             is_uncertain = d.get("is_uncertain", False)
+            map_reason = d.get("reason", "Hole mapping verified")
+            sub_scores = d.get("sub_scores", {})
         else:
-            t1_pos, t2_pos, hole1, hole2, map_conf = extract_component_lead_positions(bbox, c_type, img_w=cur_w, img_h=cur_h)
-            is_uncertain = map_conf < 0.60 or conf < 0.35
+            lead_info = extract_component_lead_positions_verbose(bbox, c_type, img_w=cur_w, img_h=cur_h)
+            hole1 = lead_info["hole1"]
+            hole2 = lead_info["hole2"]
+            map_conf = lead_info["mapping_confidence"]
+            is_uncertain = lead_info["is_uncertain"]
+            map_reason = lead_info["reason"]
+            sub_scores = lead_info["sub_scores"]
 
         # If leads map to identical hole for 2-terminal component, adjust adjacent hole along component axis
         if hole1 == hole2 and c_type not in ["ic_chip"]:
@@ -193,6 +200,10 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
             "confidence": round(conf, 2),
             "mapping_confidence": round(map_conf, 2),
             "uncertain_mapping": is_uncertain,
+            "is_uncertain": is_uncertain,
+            "mapping_reason": map_reason,
+            "reason": map_reason,
+            "sub_scores": sub_scores,
             "value": val_consensus.get("value"),
             "unit": val_consensus.get("unit", "Ω"),
             "displayValue": val_consensus.get("displayValue", "Not detected"),
@@ -325,6 +336,7 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
     # Embed validated topology and checks in netlist
     netlist_model["validity"] = {
         "status": val_res["status"],
+        "netlist_status": val_res.get("netlist_status", "NETLIST_VALID"),
         "valid": val_res["valid"],
         "errors": val_res["errors"],
         "warnings": list(dict.fromkeys(connectivity_warnings + val_res["warnings"])),

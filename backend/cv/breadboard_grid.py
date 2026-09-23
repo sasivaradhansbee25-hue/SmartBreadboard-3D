@@ -193,6 +193,139 @@ def estimate_component_terminals(
 
     return t1_img, t2_img
 
+def calculate_lead_mapping_confidence(
+    t1_canon: Tuple[float, float],
+    t2_canon: Tuple[float, float],
+    hole1: str,
+    hole2: str,
+    dist1: float,
+    dist2: float,
+    orientation_info: Dict[str, Any],
+    comp_type: str = "resistor"
+) -> Tuple[float, bool, str, Dict[str, float]]:
+    """
+    Computes deterministic multi-factor confidence score per SPEC & requirements:
+    Final confidence = 0.35 * geometry_score + 0.20 * orientation_score + 0.20 * grid_score + 0.25 * connectivity_score
+    Returns: (final_conf, is_uncertain, reason_string, sub_scores)
+    """
+    cname = comp_type.lower() if comp_type else "resistor"
+
+    # 1. Geometry Score (0 - 1): Lead-to-hole Euclidean distance
+    # 0 mm -> 1.0; 14 mm (1 pitch) -> 0.70; 25 mm+ -> 0.0
+    geo1 = max(0.0, min(1.0, 1.0 - (dist1 / 25.0)))
+    geo2 = max(0.0, min(1.0, 1.0 - (dist2 / 25.0)))
+    geometry_score = round((geo1 + geo2) / 2.0, 3)
+
+    # 2. Orientation Score (0 - 1): Bbox aspect ratio vs Mapped Holes vector
+    h1_pos = ALL_CANONICAL_HOLES.get(hole1, (0.0, 0.0))
+    h2_pos = ALL_CANONICAL_HOLES.get(hole2, (0.0, 0.0))
+    dx = abs(h2_pos[0] - h1_pos[0])
+    dy = abs(h2_pos[1] - h1_pos[1])
+    est_orient = orientation_info.get("orientation", "horizontal")
+
+    if dx > dy * 1.3:
+        holes_orient = "horizontal"
+    elif dy > dx * 1.3:
+        holes_orient = "vertical"
+    else:
+        holes_orient = "diagonal"
+
+    if est_orient == holes_orient:
+        orientation_score = 1.0
+    elif (est_orient == "diagonal" or holes_orient == "diagonal"):
+        orientation_score = 0.75
+    else:
+        orientation_score = 0.40
+
+    # 3. Grid Score (0 - 1): Physical validity and component span
+    h1_valid = hole1 in ALL_CANONICAL_HOLES
+    h2_valid = hole2 in ALL_CANONICAL_HOLES
+    in_bounds1 = (0.0 <= t1_canon[0] <= CANONICAL_W) and (0.0 <= t1_canon[1] <= CANONICAL_H)
+    in_bounds2 = (0.0 <= t2_canon[0] <= CANONICAL_W) and (0.0 <= t2_canon[1] <= CANONICAL_H)
+
+    # Physical separation check
+    same_hole = (hole1 == hole2)
+    same_col = False
+    m1 = re.match(r"([A-J])(\d+)", hole1)
+    m2 = re.match(r"([A-J])(\d+)", hole2)
+    if m1 and m2:
+        c1, c2 = int(m1.group(2)), int(m2.group(2))
+        r1, r2 = m1.group(1), m2.group(1)
+        same_col = (c1 == c2)
+        # Check if same column is across center channel (Rows A-E vs F-J)
+        cross_channel = (r1 in ['A','B','C','D','E'] and r2 in ['F','G','H','I','J']) or (r2 in ['A','B','C','D','E'] and r1 in ['F','G','H','I','J'])
+    else:
+        cross_channel = False
+
+    grid_score = 1.0
+    if not (h1_valid and h2_valid):
+        grid_score -= 0.50
+    if not (in_bounds1 and in_bounds2):
+        grid_score -= 0.30
+    if same_hole and "ic" not in cname:
+        grid_score -= 0.40
+    elif same_col and not cross_channel and "wire" not in cname and "ic" not in cname:
+        # Resistor or diode in same 5-hole strip is shorted
+        grid_score -= 0.20
+    grid_score = max(0.0, min(1.0, grid_score))
+
+    # 4. Connectivity Score (0 - 1): Breadboard region and wire connection validity
+    connectivity_score = 1.0
+    if "wire" in cname or "jumper" in cname:
+        # Wires should bridge tie points or power rails cleanly
+        if dist1 > 20.0 or dist2 > 20.0:
+            connectivity_score = 0.50
+        else:
+            connectivity_score = 0.95
+    elif "resistor" in cname or "led" in cname or "diode" in cname:
+        if same_hole:
+            connectivity_score = 0.30
+        else:
+            connectivity_score = 0.95
+
+    # Final Weighted Formula
+    final_conf = round(
+        0.35 * geometry_score +
+        0.20 * orientation_score +
+        0.20 * grid_score +
+        0.25 * connectivity_score,
+        2
+    )
+
+    # Determine uncertainty & specific human-readable reason
+    is_uncertain = False
+    reasons = []
+
+    if geometry_score < 0.60 or dist1 > 22.0 or dist2 > 22.0:
+        is_uncertain = True
+        reasons.append("terminal-to-hole distance high")
+    if orientation_score < 0.50:
+        is_uncertain = True
+        reasons.append("orientation angle misaligned with grid")
+    if same_hole and "ic" not in cname:
+        is_uncertain = True
+        reasons.append("terminals mapped to same tie-point")
+    if not (in_bounds1 and in_bounds2):
+        is_uncertain = True
+        reasons.append("terminal falls outside breadboard canonical boundary")
+    if "wire" in cname and (dist1 > 18.0 or dist2 > 18.0):
+        is_uncertain = True
+        reasons.append("endpoint connectivity requires verification")
+
+    if not reasons:
+        reason_str = "Hole mapping verified within canonical grid tolerance"
+    else:
+        reason_str = "; ".join(reasons)
+
+    sub_scores = {
+        "geometry_score": round(geometry_score, 2),
+        "orientation_score": round(orientation_score, 2),
+        "grid_score": round(grid_score, 2),
+        "connectivity_score": round(connectivity_score, 2)
+    }
+
+    return final_conf, is_uncertain, reason_str, sub_scores
+
 def extract_component_lead_positions_verbose(
     bbox_pixels: Union[List[int], Tuple[int, ...]],
     comp_type: str = "resistor",
@@ -201,9 +334,8 @@ def extract_component_lead_positions_verbose(
 ) -> Dict[str, Any]:
     """
     Extracts physical terminal locations and maps them to nearest canonical holes.
-    Returns full dictionary with orientation, terminals, holes, confidence, and boundary uncertainty.
+    Returns full dictionary with orientation, terminals, holes, confidence, sub-scores, and human-readable reason.
     """
-    # Safe handling for missing or malformed bbox
     if not bbox_pixels or len(bbox_pixels) < 4:
         return {
             "t1_img": (0.0, 0.0),
@@ -211,15 +343,17 @@ def extract_component_lead_positions_verbose(
             "hole1": "A1",
             "hole2": "A2",
             "overall_conf": 0.0,
+            "mapping_confidence": 0.0,
             "orientation_info": {"angle_deg": 0.0, "orientation": "horizontal"},
             "is_uncertain": True,
+            "reason": "Missing or malformed bounding box",
             "dist1_mm": 999.0,
-            "dist2_mm": 999.0
+            "dist2_mm": 999.0,
+            "sub_scores": {}
         }
 
     x1, y1, x2, y2 = [float(v) for v in bbox_pixels[:4]]
     if x2 <= x1 or y2 <= y1:
-        # Malformed or zero-area box
         cx, cy = max(0.0, x1), max(0.0, y1)
         return {
             "t1_img": (cx, cy),
@@ -227,10 +361,13 @@ def extract_component_lead_positions_verbose(
             "hole1": "A1",
             "hole2": "A2",
             "overall_conf": 0.0,
+            "mapping_confidence": 0.0,
             "orientation_info": {"angle_deg": 0.0, "orientation": "horizontal"},
             "is_uncertain": True,
+            "reason": "Zero-area bounding box",
             "dist1_mm": 999.0,
-            "dist2_mm": 999.0
+            "dist2_mm": 999.0,
+            "sub_scores": {}
         }
 
     cname = comp_type.lower() if comp_type else "resistor"
@@ -249,27 +386,28 @@ def extract_component_lead_positions_verbose(
     t1_cx, t1_cy = float(t1_canon[0]), float(t1_canon[1])
     t2_cx, t2_cy = float(t2_canon[0]), float(t2_canon[1])
 
-    hole1, dist1, conf1 = find_nearest_canonical_hole((t1_cx, t1_cy))
-    hole2, dist2, conf2 = find_nearest_canonical_hole((t2_cx, t2_cy))
+    hole1, dist1, _ = find_nearest_canonical_hole((t1_cx, t1_cy))
+    hole2, dist2, _ = find_nearest_canonical_hole((t2_cx, t2_cy))
 
-    # Boundary validation: Check if canonical coordinates fall outside physical board [0..CANONICAL_W, 0..CANONICAL_H]
-    out_of_bounds1 = not (0.0 <= t1_cx <= CANONICAL_W and 0.0 <= t1_cy <= CANONICAL_H)
-    out_of_bounds2 = not (0.0 <= t2_cx <= CANONICAL_W and 0.0 <= t2_cy <= CANONICAL_H)
-    img_out1 = not (0.0 <= t1_img[0] <= img_w and 0.0 <= t1_img[1] <= img_h)
-    img_out2 = not (0.0 <= t2_img[0] <= img_w and 0.0 <= t2_img[1] <= img_h)
-
-    is_uncertain = out_of_bounds1 or out_of_bounds2 or img_out1 or img_out2 or dist1 > 35.0 or dist2 > 35.0
-
-    # Prevent identical hole assignment for 2-terminal components
+    # Component-Specific Rule: Prevent identical hole assignment for 2-terminal components
     if hole1 == hole2 and "ic" not in cname:
-        row = hole1[0] if hole1 else "A"
-        col = int(hole1[1:]) if len(hole1) > 1 and hole1[1:].isdigit() else 1
-        adj_col = min(GRID_COLS, col + 3)
-        hole2 = f"{row}{adj_col}"
+        m = re.match(r"([A-J])(\d+)", hole1)
+        if m:
+            row, col = m.group(1), int(m.group(2))
+            adj_col = min(GRID_COLS, col + 2)
+            hole2 = f"{row}{adj_col}"
 
-    overall_conf = round((conf1 + conf2) / 2.0, 2)
-    if is_uncertain:
-        overall_conf = round(overall_conf * 0.5, 2)
+    # Calculate multi-factor confidence
+    overall_conf, is_uncertain, reason_str, sub_scores = calculate_lead_mapping_confidence(
+        (t1_cx, t1_cy),
+        (t2_cx, t2_cy),
+        hole1,
+        hole2,
+        dist1,
+        dist2,
+        orientation_info,
+        comp_type=cname
+    )
 
     return {
         "t1_img": t1_img,
@@ -277,10 +415,13 @@ def extract_component_lead_positions_verbose(
         "hole1": hole1,
         "hole2": hole2,
         "overall_conf": overall_conf,
+        "mapping_confidence": overall_conf,
         "orientation_info": orientation_info,
         "is_uncertain": is_uncertain,
+        "reason": reason_str,
         "dist1_mm": round(dist1, 1),
-        "dist2_mm": round(dist2, 1)
+        "dist2_mm": round(dist2, 1),
+        "sub_scores": sub_scores
     }
 
 def extract_component_lead_positions(

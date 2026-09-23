@@ -237,12 +237,10 @@ def solve_dc_circuit(netlist: Dict[str, Any]) -> SolverResult:
             is_led = "led" in ctype
             v_f_nominal = 2.0 if is_led else 0.7
             forward_voltage = round(abs_v_drop, 4)
-            if v_drop >= 1.6 if is_led else v_drop >= 0.5:
-                # Forward conducting
+            d_state = diode_states.get(comp.id, "OFF")
+            if d_state == "ON" and v_drop >= (v_f_nominal * 0.70):
+                # Forward conducting in MNA Norton model: I = (V_drop - V_f) / r_bulk
                 current = max(0.0, (v_drop - v_f_nominal) / r_bulk)
-                # If current is tiny due to linear boundary, compute based on total loop or diode model
-                if current < 1e-4 and v_drop >= v_f_nominal * 0.9:
-                    current = 0.015  # Fallback forward operating current ~15mA
                 state = "ON" if is_led else "CONDUCTING"
             elif v_drop < -0.5:
                 current = 0.0

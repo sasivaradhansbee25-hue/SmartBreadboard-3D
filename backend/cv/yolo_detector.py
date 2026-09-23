@@ -324,6 +324,15 @@ def detect_and_annotate_components(image_input: bytes | str, conf_threshold: flo
         mapped_components = netlist.get("components", [])
         nets_summary = netlist.get("nets_summary", [])
 
+        # Run real MNA Electrical Solver
+        from circuit_solver.dc_solver import run_dc_analysis
+        from circuit_solver.results import format_solver_result
+
+        solver_res = run_dc_analysis(netlist)
+        formatted_sim = format_solver_result(solver_res, netlist=netlist)
+        netlist["electrical_analysis"] = formatted_sim
+        netlist["simulationResult"] = formatted_sim
+
         # Step 3: Draw comprehensive Visual Debug Overlay (Bboxes, Centers, Terminals, Mapped Holes)
         for comp in mapped_components:
             cls_name = comp.get("type", "resistor")
@@ -375,6 +384,8 @@ def detect_and_annotate_components(image_input: bytes | str, conf_threshold: flo
             "mapped_components": mapped_components,
             "netlist": netlist,
             "nets_summary": nets_summary,
+            "electrical_analysis": formatted_sim,
+            "simulationResult": formatted_sim,
             "annotated_image": f"data:image/jpeg;base64,{ann_b64}",
             "image_meta": {
                 "width": img_w,

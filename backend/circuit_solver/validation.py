@@ -103,18 +103,20 @@ def validate_circuit_netlist(components: List[Dict[str, Any]], power_sources: Li
         needs_conf = c.get("needsConfirmation", False)
         v_source = c.get("valueSource", "")
 
-        if val is None or v_source in ["user_required", "uncertain"] or needs_conf:
-            return False, {
-                "code": "VALUE_CONFIRMATION_REQUIRED",
-                "message": f"Component '{cid}' requires value confirmation before simulation."
-            }, warnings
-
-        if isinstance(val, (int, float)):
-            if val <= 0 and comp_type in ["resistor", "capacitor", "inductor"]:
+        # Resistors, Capacitors, Inductors require numeric electrical values
+        if comp_type in ["resistor", "res", "capacitor", "cap", "inductor", "ind"]:
+            if val is None or v_source in ["user_required", "uncertain"] or needs_conf:
                 return False, {
-                    "code": "INVALID_VALUE",
-                    "message": f"Component '{cid}' has invalid non-positive value ({val})."
+                    "code": "VALUE_CONFIRMATION_REQUIRED",
+                    "message": f"Component '{cid}' requires value confirmation before simulation."
                 }, warnings
+
+            if isinstance(val, (int, float)):
+                if val <= 0:
+                    return False, {
+                        "code": "INVALID_VALUE",
+                        "message": f"Component '{cid}' has invalid non-positive value ({val})."
+                    }, warnings
 
     return True, None, warnings
 
