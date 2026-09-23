@@ -10,6 +10,7 @@ import ComponentMeasurementCard from '../components/ComponentMeasurementCard';
 import PowerSourcePanel from '../components/PowerSourcePanel';
 import SimulationControls from '../components/SimulationControls';
 import ValueInputModal from '../components/ValueInputModal';
+import ManualComponentModal from '../components/ManualComponentModal';
 import UserCorrectionModal from '../components/UserCorrectionModal';
 import ARCameraOverlay from '../components/ARCameraOverlay';
 import DigitalChangeConfirmModal from '../components/DigitalChangeConfirmModal';
@@ -106,6 +107,7 @@ export default function LiveCamera() {
 
   // Modals & Digital Lab State
   const [valueModalComp, setValueModalComp] = useState(null);
+  const [manualModalComp, setManualModalComp] = useState(null);
   const [correctionModalComp, setCorrectionModalComp] = useState(null);
   const [digitalConfirmData, setDigitalConfirmData] = useState({
     isOpen: false,

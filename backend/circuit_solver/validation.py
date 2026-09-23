@@ -95,13 +95,21 @@ def validate_circuit_netlist(components: List[Dict[str, Any]], power_sources: Li
         if count == 1 and not ("GND" in node.upper() or "PWR" in node.upper() or "VCC" in node.upper()):
             warnings.append(f"Node '{node}' is floating (connected to only 1 terminal).")
 
-    # Check for invalid component values
+    # Check for invalid or unknown component values
     for c in components:
         comp_type = str(c.get("type", "")).lower()
         cid = c.get("designator", c.get("id", "R"))
         val = c.get("value") if c.get("value") is not None else (c.get("detected_value") or c.get("user_override_value"))
         needs_conf = c.get("needsConfirmation", False)
         v_source = c.get("valueSource", "")
+        c_source = str(c.get("source", "")).lower()
+
+        # Unknown components must be manually defined before simulation
+        if comp_type == "unknown" or c_source == "unknown":
+            return False, {
+                "code": "UNKNOWN_COMPONENT_DEFINITION_REQUIRED",
+                "message": f"Component '{cid}' is unknown and must be manually defined before simulation."
+            }, warnings
 
         # Resistors, Capacitors, Inductors require numeric electrical values
         if comp_type in ["resistor", "res", "capacitor", "cap", "inductor", "ind"]:

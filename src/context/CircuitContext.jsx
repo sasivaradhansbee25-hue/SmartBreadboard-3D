@@ -237,6 +237,72 @@ export function CircuitProvider({ children }) {
     return { success: true, formatted: parsed.formatted };
   };
 
+  // Phase 17: Manual Component Recovery & Definition Layer
+  const addManualResistor = ({ id, value, unit = 'Ω', hole1, hole2, replacingId = null }) => {
+    if (!activeCircuit) return { success: false, error: 'No active circuit' };
+
+    const parsed = parseComponentValue(value, 'resistor');
+    if (!parsed.isValid) {
+      return { success: false, error: parsed.error || 'Invalid resistance value' };
+    }
+
+    const h1 = (hole1 || 'A1').toUpperCase().trim();
+    const h2 = (hole2 || 'A5').toUpperCase().trim();
+
+    const compId = id || (replacingId ? replacingId : `R_MANUAL_${Date.now().toString().slice(-4)}`);
+    const designator = compId;
+
+    const manualComponent = {
+      id: compId,
+      designator: designator,
+      name: `Manual Resistor (${parsed.formatted})`,
+      type: 'resistor',
+      value: parsed.siValue,
+      unit: parsed.unit || 'Ω',
+      displayValue: parsed.formatted,
+      formatted_value: parsed.formatted,
+      user_override_value: parsed.formatted,
+      hole1: h1,
+      hole2: h2,
+      start_hole: h1,
+      end_hole: h2,
+      node1: `NODE_HOLE_${h1}`,
+      node2: `NODE_HOLE_${h2}`,
+      source: 'manual',
+      verified: true,
+      confidence: 1.0,
+      needsConfirmation: false,
+      valueSource: 'user_confirmed'
+    };
+
+    let updatedComponents = [];
+    if (replacingId) {
+      updatedComponents = (activeCircuit.components || []).map(c => {
+        if (c.id === replacingId || c.designator === replacingId) {
+          return manualComponent;
+        }
+        return c;
+      });
+    } else {
+      const existingIdx = (activeCircuit.components || []).findIndex(c => c.id === compId || c.designator === compId);
+      if (existingIdx >= 0) {
+        updatedComponents = (activeCircuit.components || []).map((c, idx) => idx === existingIdx ? manualComponent : c);
+      } else {
+        updatedComponents = [...(activeCircuit.components || []), manualComponent];
+      }
+    }
+
+    const newCircuit = {
+      ...activeCircuit,
+      components: updatedComponents
+    };
+
+    pushHistorySnapshot(newCircuit);
+    setActiveCircuit(newCircuit);
+
+    return { success: true, component: manualComponent };
+  };
+
   // 3. Digital Wire Manipulation (Add / Remove Digital Jumper Wires)
   const addDigitalWire = (hole1, hole2) => {
     if (!activeCircuit || !hole1 || !hole2) return;
@@ -490,6 +556,7 @@ export function CircuitProvider({ children }) {
       isEditMode,
       setIsEditMode,
       applyDigitalComponentValue,
+      addManualResistor,
       addDigitalWire,
       removeDigitalWire,
       undoDigitalEdit,

@@ -202,6 +202,8 @@ def build_digital_twin_payload(
             "id": cid,
             "designator": des,
             "type": ctype,
+            "source": c.get("source", "ai"),
+            "verified": c.get("verified", True),
             "start_hole": h1,
             "end_hole": h2,
             "hole1": h1,
