@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react'
+import { useNavigate } from 'react';
 import { Camera, CameraOff, RefreshCw, Zap, CheckCircle2, AlertTriangle, ShieldCheck, Upload, Sparkles, Eye, Box, ArrowRight } from 'lucide-react';
 import { API_BASE_URL, WS_BASE_URL } from '../services/api';
+import { getIceServers } from '../config/webrtc';
 import { useCircuit } from '../context/CircuitContext';
 
 export default function PhoneCamera() {
@@ -10,6 +11,7 @@ export default function PhoneCamera() {
 
   const [sessionId, setSessionId] = useState('');
   const [status, setStatus] = useState('idle'); // idle, requesting, streaming, analyzing, complete, error
+  const [connectionStep, setConnectionStep] = useState('idle'); // idle, ws_connecting, signaling_connected, peer_found, offer_sent, ice_checking, camera_connected, failed
   const [errorMessage, setErrorMessage] = useState(null);
 
   // Photo Capture & Direct Upload State
@@ -21,6 +23,8 @@ export default function PhoneCamera() {
   const streamRef = useRef(null);
   const wsRef = useRef(null);
   const pcRef = useRef(null);
+  const pendingIceCandidatesRef = useRef([]);
+  const isOfferingRef = useRef(false);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -49,20 +53,24 @@ export default function PhoneCamera() {
       pcRef.current.close();
       pcRef.current = null;
     }
+    pendingIceCandidatesRef.current = [];
+    isOfferingRef.current = false;
     setStatus('idle');
+    setConnectionStep('idle');
   };
 
   const startPhoneCamera = async () => {
     stopPhoneStream();
     setErrorMessage(null);
     setStatus('requesting');
+    setConnectionStep('ws_connecting');
     setCapturedImage(null);
     setCapturedFile(null);
     setAnalysisResult(null);
 
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error("Camera API unavailable in this browser context (HTTP LAN). Use the file input button below to capture or pick a circuit photo directly.");
+        throw new Error("Camera API unavailable in this browser context. Please allow camera permissions or upload photo below.");
       }
 
       // 1. Request environment/rear camera stream with optimal mobile resolution
@@ -81,55 +89,141 @@ export default function PhoneCamera() {
         try {
           await videoRef.current.play();
         } catch (playErr) {
-          console.warn("Video play error on phone:", playErr);
+          console.warn("[Phone] Local video play error:", playErr);
         }
       }
 
       setStatus('streaming');
 
-      // 2. Optional WebSocket signaling attempt
-      try {
-        const wsUrl = `${WS_BASE_URL}/ws/camera/${sessionId}?role=phone`;
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
+      // 2. Open WebSocket signaling to Render backend
+      const wsUrl = `${WS_BASE_URL}/ws/camera/${sessionId}?role=phone`;
+      console.log("[Phone] Connecting signaling WebSocket:", wsUrl);
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-        ws.onopen = () => {
-          console.log("[Phone] WebSocket connected to session:", sessionId);
-          initWebRTCConnection(stream, ws);
-        };
+      ws.onopen = () => {
+        console.log("[WebRTC] phone signalingState: connected to session", sessionId);
+        setConnectionStep('signaling_connected');
+        // DO NOT create WebRTC offer here! Wait for peer_status: connected
+      };
 
-        ws.onmessage = async (event) => {
-          try {
-            const msg = JSON.parse(event.data);
-            const pc = pcRef.current;
-            if (msg.type === 'peer_status' && msg.status === 'connected' && streamRef.current && wsRef.current) {
-              initWebRTCConnection(streamRef.current, wsRef.current);
-            } else if (msg.type === 'answer' && pc) {
-              await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
-            } else if (msg.type === 'ice_candidate' && pc && msg.candidate) {
-              await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+      ws.onmessage = async (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+
+          if (msg.type === 'peer_status') {
+            if (msg.status === 'connected') {
+              console.log("[WebRTC] phone peer_status: laptop connected, creating single offer");
+              setConnectionStep('peer_found');
+              if (!isOfferingRef.current && streamRef.current) {
+                await createAndSendOffer(streamRef.current, ws);
+              }
+            } else if (msg.status === 'disconnected') {
+              console.log("[WebRTC] phone peer_status: laptop disconnected");
+              setConnectionStep('signaling_connected');
+              isOfferingRef.current = false;
+              if (pcRef.current) {
+                pcRef.current.close();
+                pcRef.current = null;
+              }
             }
-          } catch (e) {
-            console.warn("[Phone WS] Message error:", e);
+          } else if (msg.type === 'answer') {
+            console.log("[WebRTC] phone received answer SDP from laptop");
+            const pc = pcRef.current;
+            if (pc) {
+              await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
+              console.log("[WebRTC] phone setRemoteDescription(answer) success");
+              // Flush queued ICE candidates
+              if (pendingIceCandidatesRef.current.length > 0) {
+                console.log(`[WebRTC] phone flushing ${pendingIceCandidatesRef.current.length} queued ICE candidates`);
+                for (const candidate of pendingIceCandidatesRef.current) {
+                  try {
+                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                  } catch (iceErr) {
+                    console.warn("[WebRTC] phone queued ICE error:", iceErr);
+                  }
+                }
+                pendingIceCandidatesRef.current = [];
+              }
+            }
+          } else if (msg.type === 'ice_candidate' && msg.candidate) {
+            const pc = pcRef.current;
+            if (!pc || !pc.remoteDescription || !pc.remoteDescription.type) {
+              console.log("[WebRTC] phone queuing ICE candidate before remote description");
+              pendingIceCandidatesRef.current.push(msg.candidate);
+            } else {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+              } catch (iceErr) {
+                console.warn("[WebRTC] phone addIceCandidate error:", iceErr);
+              }
+            }
           }
-        };
-      } catch (wsErr) {
-        console.warn("[Phone WS] Non-critical signaling notice:", wsErr);
-      }
+        } catch (e) {
+          console.warn("[Phone WS] Message processing error:", e);
+        }
+      };
+
+      ws.onerror = (e) => {
+        console.warn("[Phone WS] Signaling error:", e);
+        setConnectionStep('failed');
+      };
+
+      ws.onclose = () => {
+        console.log("[Phone WS] Signaling closed");
+        if (connectionStep !== 'idle') {
+          setConnectionStep('idle');
+        }
+      };
     } catch (err) {
-      console.warn("[Phone] Camera access warning:", err);
-      setErrorMessage(err.message || "Could not start camera stream. Use File Upload capture below.");
+      console.warn("[Phone] Camera start error:", err);
+      setErrorMessage(err.message || "Could not start camera. Use Photo Upload below.");
       setStatus('error');
+      setConnectionStep('failed');
     }
   };
 
-  const initWebRTCConnection = async (stream, ws) => {
+  const createAndSendOffer = async (stream, ws) => {
+    if (isOfferingRef.current) return;
+    isOfferingRef.current = true;
+
     try {
-      if (pcRef.current) pcRef.current.close();
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      if (pcRef.current) {
+        pcRef.current.close();
+      }
+
+      const pc = new RTCPeerConnection({ iceServers: getIceServers() });
       pcRef.current = pc;
 
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      // Bug 3: Connection State Logging
+      pc.onconnectionstatechange = () => {
+        console.log("[WebRTC] phone connectionState:", pc.connectionState);
+        if (pc.connectionState === 'connected') {
+          setConnectionStep('camera_connected');
+        } else if (pc.connectionState === 'connecting') {
+          setConnectionStep('ice_checking');
+        } else if (pc.connectionState === 'failed') {
+          setConnectionStep('failed');
+          isOfferingRef.current = false;
+        } else if (pc.connectionState === 'disconnected') {
+          isOfferingRef.current = false;
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        console.log("[WebRTC] phone iceConnectionState:", pc.iceConnectionState);
+        if (pc.iceConnectionState === 'checking') {
+          setConnectionStep('ice_checking');
+        } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+          setConnectionStep('camera_connected');
+        } else if (pc.iceConnectionState === 'failed') {
+          setConnectionStep('failed');
+        }
+      };
+
+      pc.onsignalingstatechange = () => {
+        console.log("[WebRTC] phone signalingState:", pc.signalingState);
+      };
 
       pc.onicecandidate = (e) => {
         if (e.candidate && ws.readyState === WebSocket.OPEN) {
@@ -137,13 +231,22 @@ export default function PhoneCamera() {
         }
       };
 
+      // Add local tracks to peer connection
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      console.log("[WebRTC] phone created single offer & setLocalDescription");
+
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp }));
+        console.log("[WebRTC] phone sent offer SDP to laptop");
+        setConnectionStep('offer_sent');
       }
     } catch (e) {
-      console.warn("[Phone WebRTC] Peer connection notice:", e);
+      console.warn("[Phone WebRTC] Error creating offer:", e);
+      isOfferingRef.current = false;
+      setConnectionStep('failed');
     }
   };
 
@@ -303,7 +406,7 @@ export default function PhoneCamera() {
       {/* Main Content Body */}
       <main style={{ flex: 1, padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '600px', margin: '0 auto', width: '100%' }}>
         
-        {/* Session Badge */}
+        {/* Session & WebRTC Connection Status Badge */}
         <div style={{
           background: '#0f172a',
           border: '1px solid #1e293b',
@@ -311,15 +414,32 @@ export default function PhoneCamera() {
           padding: '0.75rem 1rem',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center'
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '0.5rem'
         }}>
           <div>
             <div style={{ fontSize: '0.7rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>PAIRING SESSION ID</div>
             <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#38bdf8', fontFamily: 'monospace' }}>{sessionId}</div>
           </div>
 
-          <div style={{ fontSize: '0.78rem', color: status === 'complete' ? '#38bdf8' : status === 'streaming' ? '#34d399' : '#fbbf24', fontWeight: 600 }}>
-            {status === 'complete' ? '● AI SOLVED' : status === 'streaming' ? '● CAMERA READY' : '○ READY FOR CAPTURE'}
+          <div style={{
+            fontSize: '0.78rem',
+            fontWeight: 700,
+            padding: '0.25rem 0.65rem',
+            borderRadius: '12px',
+            background: connectionStep === 'camera_connected' ? 'rgba(16, 185, 129, 0.15)' : connectionStep === 'failed' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(56, 189, 248, 0.15)',
+            border: `1px solid ${connectionStep === 'camera_connected' ? '#10b981' : connectionStep === 'failed' ? '#ef4444' : '#38bdf8'}`,
+            color: connectionStep === 'camera_connected' ? '#10b981' : connectionStep === 'failed' ? '#ef4444' : '#38bdf8'
+          }}>
+            {connectionStep === 'ws_connecting' && '● WEBSOCKET CONNECTING'}
+            {connectionStep === 'signaling_connected' && '● SIGNALING CONNECTED'}
+            {connectionStep === 'peer_found' && '● PEER FOUND'}
+            {connectionStep === 'offer_sent' && '● OFFER SENT'}
+            {connectionStep === 'ice_checking' && '● ICE CHECKING'}
+            {connectionStep === 'camera_connected' && '● CAMERA CONNECTED'}
+            {connectionStep === 'failed' && '⚠ PHONE CONNECTION FAILED'}
+            {connectionStep === 'idle' && (status === 'complete' ? '● AI SOLVED' : '○ READY FOR CAPTURE')}
           </div>
         </div>
 
