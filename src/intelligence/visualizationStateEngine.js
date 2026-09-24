@@ -407,6 +407,141 @@ export function generateVisualizationState(classification, electricalBehaviour, 
     };
   }
 
+  // =========================================================================
+  // 6. RLC SERIES RESONANCE VISUALIZATION (Phase 26)
+  // =========================================================================
+  if (circuitType === 'RLC_SERIES_RESONANCE') {
+    const r = matchedComponents?.resistor;
+    const l = matchedComponents?.inductor;
+    const c = matchedComponents?.capacitor;
+    const p = electricalBehaviour?.parameters;
+
+    if (r) {
+      const cid = r.id || r.designator;
+      compHighlights[cid] = {
+        role: 'DAMPING_RESISTOR',
+        roleLabel: 'Series Resistor (R)',
+        color: '#38bdf8', // Cyan
+        haloIntensity: 0.9,
+        pulseSpeed: 1.2,
+        tooltip: `R: Sets peak resonant current I_max = Vin/R (${p?.iAtResonance?.formatted || 'N/A'})`
+      };
+    }
+
+    if (l) {
+      const cid = l.id || l.designator;
+      compHighlights[cid] = {
+        role: 'INDUCTIVE_REACTOR',
+        roleLabel: 'Inductor (L)',
+        color: '#a855f7', // Purple
+        haloIntensity: 1.1,
+        pulseSpeed: 1.8,
+        tooltip: `L: Generates inductive reactance XL = ωL (+90° phase lead)`
+      };
+    }
+
+    if (c) {
+      const cid = c.id || c.designator;
+      compHighlights[cid] = {
+        role: 'CAPACITIVE_REACTOR',
+        roleLabel: 'Capacitor (C)',
+        color: '#ec4899', // Pink
+        haloIntensity: 1.1,
+        pulseSpeed: 1.8,
+        tooltip: `C: Generates capacitive reactance XC = 1/(ωC) (-90° phase lag)`
+      };
+    }
+
+    return {
+      status: 'VERIFIED',
+      circuitType,
+      visualizationType: VISUALIZATION_TYPES.RESONANCE_CURVE,
+      isEducationalAnimationActive: true,
+      componentHighlights: compHighlights,
+      currentFlow: {
+        enabled: true,
+        branches: [
+          {
+            id: 'branch-rlc-series',
+            currentMa: p?.iAtResonance?.value || 10.0,
+            formatted: p?.iAtResonance?.formatted || 'Peak Resonant Current',
+            direction: 'FORWARD',
+            speed: 2.2,
+            color: '#f59e0b' // Amber gold resonant current
+          }
+        ]
+      },
+      signalFlow: {
+        type: 'AC_RESONANCE',
+        active: true,
+        phaseDeg: 0.0,
+        f0Formatted: p?.f0?.formatted || 'Resonance'
+      },
+      nodeVoltages,
+      waveforms: electricalBehaviour?.waveforms || [],
+      resonanceState: {
+        active: true,
+        f0: p?.f0?.formatted || 'N/A',
+        qFactor: p?.qFactor?.formatted || 'N/A',
+        bandwidth: p?.bandwidth?.formatted || 'N/A',
+        mode: 'SERIES'
+      },
+      transientState: null,
+      educationalAnnotations: [
+        {
+          id: 'anno-rlc-res-1',
+          target: l?.id || 'L1',
+          title: 'Series Reactance Cancellation',
+          text: `At f₀ = ${p?.f0?.formatted || 'Resonance'}: XL = XC, impedance reaches minimum |Z| = R (${p?.zAtResonance?.formatted || 'N/A'})`
+        }
+      ],
+      warningBanner: null
+    };
+  }
+
+  // =========================================================================
+  // 7. RLC PARALLEL RESONANCE VISUALIZATION (Phase 26)
+  // =========================================================================
+  if (circuitType === 'RLC_PARALLEL_RESONANCE') {
+    const r = matchedComponents?.resistor;
+    const l = matchedComponents?.inductor;
+    const c = matchedComponents?.capacitor;
+    const p = electricalBehaviour?.parameters;
+
+    if (r) compHighlights[r.id || r.designator] = { role: 'TANK_RESISTOR', roleLabel: 'Tank Resistor (R)', color: '#38bdf8', haloIntensity: 0.8, pulseSpeed: 1.0 };
+    if (l) compHighlights[l.id || l.designator] = { role: 'TANK_INDUCTOR', roleLabel: 'Tank Inductor (L)', color: '#a855f7', haloIntensity: 1.1, pulseSpeed: 1.8 };
+    if (c) compHighlights[c.id || c.designator] = { role: 'TANK_CAPACITOR', roleLabel: 'Tank Capacitor (C)', color: '#ec4899', haloIntensity: 1.1, pulseSpeed: 1.8 };
+
+    return {
+      status: 'VERIFIED',
+      circuitType,
+      visualizationType: VISUALIZATION_TYPES.RESONANCE_CURVE,
+      isEducationalAnimationActive: true,
+      componentHighlights: compHighlights,
+      currentFlow: { enabled: true, branches: [] },
+      signalFlow: { type: 'AC_RESONANCE', active: true, phaseDeg: 0.0 },
+      nodeVoltages,
+      waveforms: electricalBehaviour?.waveforms || [],
+      resonanceState: {
+        active: true,
+        f0: p?.f0?.formatted || 'N/A',
+        qFactor: p?.qFactor?.formatted || 'N/A',
+        bandwidth: p?.bandwidth?.formatted || 'N/A',
+        mode: 'PARALLEL'
+      },
+      transientState: null,
+      educationalAnnotations: [
+        {
+          id: 'anno-rlc-par-1',
+          target: 'TANK_LOOP',
+          title: 'Parallel Resonance Tank',
+          text: `At f₀ = ${p?.f0?.formatted || 'Resonance'}: BL = BC, impedance reaches maximum |Z| = R`
+        }
+      ],
+      warningBanner: null
+    };
+  }
+
   // Fallback generic state
   return {
     status: 'VERIFIED',
@@ -423,5 +558,6 @@ export function generateVisualizationState(classification, electricalBehaviour, 
     warningBanner: null
   };
 }
+
 
 export default generateVisualizationState;

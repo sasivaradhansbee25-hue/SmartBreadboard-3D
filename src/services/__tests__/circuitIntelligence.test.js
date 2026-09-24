@@ -151,20 +151,22 @@ describe('Phase 25: Context-Aware Circuit Intelligence & AR Learning Engine', ()
     assert.equal(classification.topologyStatus, 'SHORT_CIRCUIT_FAULT');
   });
 
-  // Test 7: RLC Resonant Tank is marked as UNSUPPORTED when AC dynamic solver is unavailable
-  test('7. RLC circuit is recognized but flagged as UNSUPPORTED AC dynamic model without fake simulation', () => {
+  // Test 7: RLC Series Resonance verified with Phase 26 AC Engine
+  test('7. Valid series RLC network is classified as VERIFIED RLC_SERIES_RESONANCE with AC frequency spectrum', () => {
     const netlist = {
       components: [
         { id: 'R1', type: 'resistor', value: 100, node1: 'N1', node2: 'N2' },
-        { id: 'L1', type: 'inductor', value: 0.01, node1: 'N2', node2: 'N3' },
-        { id: 'C1', type: 'capacitor', value: 1e-6, node1: 'N3', node2: 'N1' }
+        { id: 'L1', type: 'inductor', value: 0.010, node1: 'N2', node2: 'N3' },
+        { id: 'C1', type: 'capacitor', value: 100e-6, node1: 'N3', node2: 'GND' }
       ]
     };
 
     const intel = analyzeCircuitIntelligence(netlist);
-    assert.equal(intel.classification.circuitType, 'RLC_RESONANT_TANK');
-    assert.equal(intel.classification.verificationState, VERIFICATION_STATES.UNSUPPORTED);
-    assert.equal(intel.visualizationState.isEducationalAnimationActive, false);
+    assert.equal(intel.classification.circuitType, 'RLC_SERIES_RESONANCE');
+    assert.equal(intel.classification.verificationState, VERIFICATION_STATES.VERIFIED);
+    assert.equal(intel.visualizationState.isEducationalAnimationActive, true);
+    assert.equal(intel.visualizationState.visualizationType, VISUALIZATION_TYPES.RESONANCE_CURVE);
+    assert.ok(intel.electricalBehaviour.parameters.f0.value > 0);
   });
 
   // Test 8: Component value change reactively updates theoretical parameters

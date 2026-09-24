@@ -440,26 +440,93 @@ export function classifyCircuitTopology(netlist, simulationResult = null) {
     }
   }
 
-  // 6. RLC Resonant Tank Rule (Model Gate)
+  // 6. RLC Resonant Circuit Rules (Phase 26 Verified AC Engine)
   if (typeCounts.inductor >= 1 && typeCounts.capacitor >= 1) {
+    const lComp = compsByType.inductor[0];
+    const cComp = compsByType.capacitor[0];
+    const rComp = compsByType.resistor[0] || null;
+
+    const nL = getComponentNodes(lComp);
+    const nC = getComponentNodes(cComp);
+    const nR = rComp ? getComponentNodes(rComp) : null;
+
+    const lNodes = new Set([nL.node1, nL.node2].filter(Boolean));
+    const cNodes = new Set([nC.node1, nC.node2].filter(Boolean));
+    const rNodes = nR ? new Set([nR.node1, nR.node2].filter(Boolean)) : new Set();
+
+    // Check Parallel Connection: All 3 share identical pair of nodes
+    const isParallelLC = lNodes.size === 2 && cNodes.size === 2 && [...lNodes].every(n => cNodes.has(n));
+    const isParallelRLC = isParallelLC && (!nR || [...rNodes].every(n => lNodes.has(n)));
+
+    if (isParallelRLC) {
+      return {
+        circuitType: 'RLC_PARALLEL_RESONANCE',
+        displayName: 'Parallel RLC Resonant Tank',
+        category: 'AC',
+        verificationState: VERIFICATION_STATES.VERIFIED,
+        confidence: 0.96,
+        topologyStatus: 'VALID_PARALLEL_RLC',
+        electricalModelStatus: 'AVAILABLE',
+        parameters: {
+          inductor: lComp.id || lComp.designator,
+          capacitor: cComp.id || cComp.designator,
+          resistor: rComp ? (rComp.id || rComp.designator) : null,
+          shared_nodes: [...lNodes]
+        },
+        matchedComponents: { inductor: lComp, capacitor: cComp, resistor: rComp },
+        visualizationType: VISUALIZATION_TYPES.RESONANCE_CURVE,
+        warnings: [],
+        missingRequirements: []
+      };
+    }
+
+    // Check Series Connection: R, L, C share single intermediate junctions in cascade
+    const sharedLC = [...lNodes].filter(n => cNodes.has(n));
+    const sharedRL = nR ? [...rNodes].filter(n => lNodes.has(n)) : [];
+    const sharedRC = nR ? [...rNodes].filter(n => cNodes.has(n)) : [];
+
+    const isSeriesRLC = (sharedLC.length === 1 && (sharedRL.length === 1 || sharedRC.length === 1)) || (sharedLC.length === 1 && !rComp);
+
+    if (isSeriesRLC) {
+      return {
+        circuitType: 'RLC_SERIES_RESONANCE',
+        displayName: 'Series RLC Resonant Circuit',
+        category: 'AC',
+        verificationState: VERIFICATION_STATES.VERIFIED,
+        confidence: 0.98,
+        topologyStatus: 'VALID_SERIES_RLC',
+        electricalModelStatus: 'AVAILABLE',
+        parameters: {
+          inductor: lComp.id || lComp.designator,
+          capacitor: cComp.id || cComp.designator,
+          resistor: rComp ? (rComp.id || rComp.designator) : null
+        },
+        matchedComponents: { inductor: lComp, capacitor: cComp, resistor: rComp },
+        visualizationType: VISUALIZATION_TYPES.RESONANCE_CURVE,
+        warnings: [],
+        missingRequirements: []
+      };
+    }
+
+    // If components exist but topology is incomplete
     return {
       circuitType: 'RLC_RESONANT_TANK',
-      displayName: 'RLC Resonant Tank',
+      displayName: 'RLC Network (Unresolved Topology)',
       category: 'AC',
-      verificationState: VERIFICATION_STATES.UNSUPPORTED,
-      confidence: 0.90,
-      topologyStatus: 'RLC_TOPOLOGY_DETECTED',
-      electricalModelStatus: 'THEORETICAL_ONLY_AC_UNAVAILABLE',
+      verificationState: VERIFICATION_STATES.PARTIALLY_VERIFIED,
+      confidence: 0.60,
+      topologyStatus: 'INCOMPLETE_RLC_LOOP',
+      electricalModelStatus: 'AVAILABLE',
       parameters: {
         inductors: compsByType.inductor.map(c => c.id || c.designator),
         capacitors: compsByType.capacitor.map(c => c.id || c.designator)
       },
       visualizationType: VISUALIZATION_TYPES.RESONANCE_CURVE,
       warnings: [
-        'RLC topology recognized, but dynamic AC frequency-domain solver is not enabled in standard DC MNA engine.'
+        'RLC components detected but terminals do not form a closed Series or Parallel resonance loop.'
       ],
       missingRequirements: [
-        'AC Dynamic Impedance Matrix Solver required for transient resonance simulation.'
+        'Connect R, L, and C in continuous series branch or across identical parallel tie-points.'
       ]
     };
   }

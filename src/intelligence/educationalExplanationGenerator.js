@@ -96,9 +96,35 @@ export function generateEducationalExplanation(classification, electricalBehavio
     ];
     sections.visualGuide = 'The exponential decay curve illustrates transient energy discharge. The purple and pink halos mark the active bleed dissipation path.';
     sections.whatIfAnalysis = 'Increasing bleed resistance R prolongs charge retention. Decreasing R produces rapid discharge with higher peak transient current.';
+  } else if (circuitType === 'RLC_SERIES_RESONANCE') {
+    sections.keyComponents = [
+      { name: 'Damping Resistor (R)', role: `Limits peak resonant current to I_max = Vin/R (${p?.iAtResonance?.formatted || 'N/A'}) and sets bandwidth.` },
+      { name: 'Resonant Inductor (L)', role: `Stores magnetic energy, creating inductive reactance XL = ωL (+90° phase lead).` },
+      { name: 'Tuning Capacitor (C)', role: `Stores electric energy, creating capacitive reactance XC = 1/(ωC) (-90° phase lag).` }
+    ];
+    sections.governingEquations = [
+      { equation: 'f₀ = 1 / [ 2π√(L × C) ]', substituted: `f₀ = 1 / [ 2π × √(${p?.l?.formatted || '10mH'} × ${p?.c?.formatted || '100µF'}) ] = ${p?.f0?.formatted || '159.2 Hz'}` },
+      { equation: 'Q = (ω₀ × L) / R', substituted: `Q = (2π × ${p?.f0?.value || 159}Hz × ${p?.l?.formatted || '10mH'}) / ${p?.r?.formatted || '100Ω'} = ${p?.qFactor?.formatted || '0.10'}` },
+      { equation: 'BW = f₀ / Q = R / (2πL)', substituted: `BW = ${p?.f0?.formatted || '159Hz'} / ${p?.qFactor?.formatted || '0.1'} = ${p?.bandwidth?.formatted || 'N/A'}` }
+    ];
+    sections.visualGuide = 'The frequency spectrum chart displays the sharp resonance peak at f₀. At resonance, XL cancels XC exactly, causing total impedance to collapse to pure resistance |Z| = R.';
+    sections.whatIfAnalysis = 'Decreasing series resistance R sharpens the resonance peak, increasing Quality factor Q and narrowing bandwidth BW. Increasing inductance L increases stored magnetic energy.';
+  } else if (circuitType === 'RLC_PARALLEL_RESONANCE') {
+    sections.keyComponents = [
+      { name: 'Tank Resistor (R)', role: `Sets peak tank impedance |Z_max| = R and determines parallel damping.` },
+      { name: 'Tank Inductor (L)', role: `Provides inductive branch susceptance BL = 1/(ωL).` },
+      { name: 'Tank Capacitor (C)', role: `Provides capacitive branch susceptance BC = ωC.` }
+    ];
+    sections.governingEquations = [
+      { equation: 'f₀ = 1 / [ 2π√(L × C) ]', substituted: `Resonance frequency f₀ = ${p?.f0?.formatted || 'N/A'}` },
+      { equation: 'Q = R × √(C / L)', substituted: `Q = ${p?.r?.formatted || '1kΩ'} × √(${p?.c?.formatted || '100nF'} / ${p?.l?.formatted || '10mH'}) = ${p?.qFactor?.formatted || 'N/A'}` }
+    ];
+    sections.visualGuide = 'In a parallel tank, circulating reactive currents oscillate between L and C while external supply current reaches a minimum.';
+    sections.whatIfAnalysis = 'Increasing parallel resistance R increases peak impedance and Quality factor Q, transforming the tank into a higher-selectivity filter.';
   }
 
   return sections;
 }
 
 export default generateEducationalExplanation;
+

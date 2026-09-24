@@ -299,33 +299,131 @@ export function calculateCircuitBehaviour(classification, netlist, simulationRes
     }
 
     // -----------------------------------------------------------------------
-    // 6. SERIES-PARALLEL BRIDGE
+    // 7. SERIES RLC RESONANCE
     // -----------------------------------------------------------------------
-    case 'SERIES_PARALLEL_RESISTOR_NETWORK': {
-      const r1 = extractNumericValue(matchedComponents?.r_series, 1000.0);
-      const r2 = extractNumericValue(matchedComponents?.r_par1, 2200.0);
-      const r3 = extractNumericValue(matchedComponents?.r_par2, 4700.0);
+    case 'RLC_SERIES_RESONANCE': {
+      const rComp = matchedComponents?.resistor;
+      const lComp = matchedComponents?.inductor;
+      const cComp = matchedComponents?.capacitor;
 
-      const rPar = (r2 * r3) / (r2 + r3);
-      const rTotal = r1 + rPar;
-      const iTotalA = vSupply / rTotal;
-      const vBridge = iTotalA * rPar;
+      const r = extractNumericValue(rComp, 100.0);
+      let l = extractNumericValue(lComp, 0.010); // default 10 mH
+      let c = extractNumericValue(cComp, 100e-6); // default 100 µF
+      if (l > 10.0) l = l * 1e-3; // assume mH if large
+      if (c > 1.0) c = c * 1e-6; // assume µF if large
+
+      const lcProd = Math.max(l * c, 1e-18);
+      const omega0 = 1.0 / Math.sqrt(lcProd);
+      const f0Hz = omega0 / (2.0 * Math.PI);
+      const xl0 = omega0 * l;
+      const xc0 = 1.0 / (omega0 * c);
+
+      // Q and Bandwidth
+      const qFactor = (omega0 * l) / Math.max(r, 1e-6);
+      const bwHz = f0Hz / Math.max(qFactor, 1e-4);
+      const fLowHz = Math.max(0.1, f0Hz - bwHz / 2.0);
+      const fHighHz = f0Hz + bwHz / 2.0;
+
+      const currentAtResonanceA = vSupply / Math.max(r, 1e-6);
+      const currentAtResonanceMa = currentAtResonanceA * 1000.0;
+
+      // Generate 60-point frequency response sweep from 0.1*f0 to 10*f0
+      const numPoints = 60;
+      const fMin = Math.max(0.5, f0Hz * 0.1);
+      const fMax = f0Hz * 10.0;
+      const logMin = Math.log10(fMin);
+      const logMax = Math.log10(fMax);
+      const sweepPoints = [];
+
+      for (let i = 0; i <= numPoints; i++) {
+        const f = Math.pow(10, logMin + (i / numPoints) * (logMax - logMin));
+        const w = 2.0 * Math.PI * f;
+        const xl = w * l;
+        const xc = 1.0 / (w * c);
+        const reactance = xl - xc;
+        const zMag = Math.sqrt(r * r + reactance * reactance);
+        const phaseDeg = (Math.atan2(reactance, r) * 180.0) / Math.PI;
+        const iMag = (vSupply / zMag) * 1000.0; // mA
+        const magDb = 20.0 * Math.log10(Math.max(iMag / Math.max(currentAtResonanceMa, 1e-6), 1e-4));
+
+        sweepPoints.push({
+          frequencyHz: Number(f.toFixed(2)),
+          omegaRadS: Number(w.toFixed(2)),
+          magnitudeDb: Number(magDb.toFixed(2)),
+          phaseDeg: Number(phaseDeg.toFixed(2)),
+          impedanceMagnitudeOhms: Number(zMag.toFixed(2)),
+          currentMagnitudeMa: Number(iMag.toFixed(3)),
+          reactanceOhms: Number(reactance.toFixed(2))
+        });
+      }
 
       return {
         status: 'SOLVED_THEORETICAL',
         circuitType,
-        sourceVoltage: { value: vSupply, unit: 'V', label: 'Supply Voltage (Vin)', source: 'nominal_supply', is_measured: false },
+        sourceVoltage: { value: vSupply, unit: 'V', label: 'AC Test Signal (Vin)', source: 'nominal_supply', is_measured: false },
         parameters: {
-          r1: { value: r1, unit: 'Ω', formatted: `${(r1 / 1000).toFixed(2)} kΩ`, label: 'Series Resistor (R1)', source: 'component_value', is_measured: false },
-          r2: { value: r2, unit: 'Ω', formatted: `${(r2 / 1000).toFixed(2)} kΩ`, label: 'Parallel Resistor (R2)', source: 'component_value', is_measured: false },
-          r3: { value: r3, unit: 'Ω', formatted: `${(r3 / 1000).toFixed(2)} kΩ`, label: 'Parallel Resistor (R3)', source: 'component_value', is_measured: false },
-          rPar: { value: rPar, unit: 'Ω', formatted: `${(rPar / 1000).toFixed(2)} kΩ`, label: 'Parallel Bank (R2 ∥ R3)', source: 'theoretical_model', is_measured: false },
-          rTotal: { value: rTotal, unit: 'Ω', formatted: `${(rTotal / 1000).toFixed(2)} kΩ`, label: 'Total Equivalent Resistance (Req)', source: 'theoretical_model', is_measured: false },
-          vBridge: { value: vBridge, unit: 'V', formatted: `${vBridge.toFixed(3)} V`, label: 'Bridge Node Voltage', source: 'theoretical_model', is_measured: false },
-          iTotal: { value: iTotalA * 1000.0, unit: 'mA', formatted: `${(iTotalA * 1000.0).toFixed(2)} mA`, label: 'Total Current', source: 'theoretical_model', is_measured: false }
+          r: { value: r, unit: 'Ω', formatted: `${r >= 1000 ? (r / 1000).toFixed(2) + ' kΩ' : r.toFixed(1) + ' Ω'}`, label: 'Series Resistance (R)', source: 'component_value', is_measured: false },
+          l: { value: l, unit: 'H', formatted: `${l < 1 ? (l * 1000).toFixed(2) + ' mH' : l.toFixed(3) + ' H'}`, label: 'Resonant Inductor (L)', source: 'component_value', is_measured: false },
+          c: { value: c, unit: 'F', formatted: `${c < 1e-6 ? (c * 1e9).toFixed(1) + ' nF' : (c * 1e6).toFixed(2) + ' µF'}`, label: 'Tuning Capacitor (C)', source: 'component_value', is_measured: false },
+          f0: { value: f0Hz, unit: 'Hz', formatted: `${f0Hz >= 1000 ? (f0Hz / 1000).toFixed(3) + ' kHz' : f0Hz.toFixed(2) + ' Hz'}`, label: 'Resonant Frequency (f₀)', source: 'theoretical_model', is_measured: false },
+          qFactor: { value: qFactor, unit: '', formatted: `${qFactor.toFixed(2)}`, label: 'Quality Factor (Q)', source: 'theoretical_model', is_measured: false },
+          bandwidth: { value: bwHz, unit: 'Hz', formatted: `${bwHz >= 1000 ? (bwHz / 1000).toFixed(2) + ' kHz' : bwHz.toFixed(2) + ' Hz'}`, label: 'Bandwidth (BW = f₀/Q)', source: 'theoretical_model', is_measured: false },
+          fLow: { value: fLowHz, unit: 'Hz', formatted: `${fLowHz >= 1000 ? (fLowHz / 1000).toFixed(2) + ' kHz' : fLowHz.toFixed(2) + ' Hz'}`, label: 'Lower Half-Power Cutoff (f_low)', source: 'theoretical_model', is_measured: false },
+          fHigh: { value: fHighHz, unit: 'Hz', formatted: `${fHighHz >= 1000 ? (fHighHz / 1000).toFixed(2) + ' kHz' : fHighHz.toFixed(2) + ' Hz'}`, label: 'Upper Half-Power Cutoff (f_high)', source: 'theoretical_model', is_measured: false },
+          zAtResonance: { value: r, unit: 'Ω', formatted: `${r.toFixed(1)} Ω (Pure Real)`, label: 'Resonance Impedance (|Z₀| = R)', source: 'theoretical_model', is_measured: false },
+          iAtResonance: { value: currentAtResonanceMa, unit: 'mA', formatted: `${currentAtResonanceMa.toFixed(2)} mA (Peak)`, label: 'Peak Resonant Current (I_max)', source: 'theoretical_model', is_measured: false }
+        },
+        waveforms: [
+          {
+            name: 'Series RLC Current Magnitude & Resonance Spectrum |I(f)|',
+            type: 'frequency_response',
+            xAxis: 'Frequency (Hz)',
+            yAxis: 'Response Magnitude (dB)',
+            f0Hz: Number(f0Hz.toFixed(2)),
+            fLowHz: Number(fLowHz.toFixed(2)),
+            fHighHz: Number(fHighHz.toFixed(2)),
+            points: sweepPoints
+          }
+        ],
+        governingEquation: 'f₀ = 1 / [ 2π√(L × C) ],  Q = (ω₀ × L) / R,  BW = f₀ / Q'
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // 8. PARALLEL RLC RESONANCE
+    // -----------------------------------------------------------------------
+    case 'RLC_PARALLEL_RESONANCE': {
+      const rComp = matchedComponents?.resistor;
+      const lComp = matchedComponents?.inductor;
+      const cComp = matchedComponents?.capacitor;
+
+      const r = extractNumericValue(rComp, 1000.0);
+      let l = extractNumericValue(lComp, 0.010);
+      let c = extractNumericValue(cComp, 100e-6);
+      if (l > 10.0) l = l * 1e-3;
+      if (c > 1.0) c = c * 1e-6;
+
+      const lcProd = Math.max(l * c, 1e-18);
+      const omega0 = 1.0 / Math.sqrt(lcProd);
+      const f0Hz = omega0 / (2.0 * Math.PI);
+      const qFactor = r * Math.sqrt(c / Math.max(l, 1e-12));
+      const bwHz = f0Hz / Math.max(qFactor, 1e-4);
+
+      return {
+        status: 'SOLVED_THEORETICAL',
+        circuitType,
+        sourceVoltage: { value: vSupply, unit: 'V', label: 'AC Source Voltage', source: 'nominal_supply', is_measured: false },
+        parameters: {
+          r: { value: r, unit: 'Ω', formatted: `${r >= 1000 ? (r / 1000).toFixed(2) + ' kΩ' : r.toFixed(1) + ' Ω'}`, label: 'Tank Resistance (R)', source: 'component_value', is_measured: false },
+          l: { value: l, unit: 'H', formatted: `${l < 1 ? (l * 1000).toFixed(2) + ' mH' : l.toFixed(3) + ' H'}`, label: 'Tank Inductor (L)', source: 'component_value', is_measured: false },
+          c: { value: c, unit: 'F', formatted: `${c < 1e-6 ? (c * 1e9).toFixed(1) + ' nF' : (c * 1e6).toFixed(2) + ' µF'}`, label: 'Tank Capacitor (C)', source: 'component_value', is_measured: false },
+          f0: { value: f0Hz, unit: 'Hz', formatted: `${f0Hz >= 1000 ? (f0Hz / 1000).toFixed(3) + ' kHz' : f0Hz.toFixed(2) + ' Hz'}`, label: 'Resonant Frequency (f₀)', source: 'theoretical_model', is_measured: false },
+          qFactor: { value: qFactor, unit: '', formatted: `${qFactor.toFixed(2)}`, label: 'Quality Factor (Q = R√(C/L))', source: 'theoretical_model', is_measured: false },
+          bandwidth: { value: bwHz, unit: 'Hz', formatted: `${bwHz.toFixed(2)} Hz`, label: 'Bandwidth (BW)', source: 'theoretical_model', is_measured: false },
+          zAtResonance: { value: r, unit: 'Ω', formatted: `${r >= 1000 ? (r / 1000).toFixed(2) + ' kΩ' : r.toFixed(1) + ' Ω'} (Maximum |Z|)`, label: 'Peak Resonance Impedance', source: 'theoretical_model', is_measured: false }
         },
         waveforms: [],
-        governingEquation: 'Req = R1 + [ (R2 × R3) / (R2 + R3) ]'
+        governingEquation: 'f₀ = 1 / [ 2π√(L × C) ],  Q = R × √(C / L),  BW = f₀ / Q'
       };
     }
 
@@ -341,3 +439,4 @@ export function calculateCircuitBehaviour(classification, netlist, simulationRes
 }
 
 export default calculateCircuitBehaviour;
+

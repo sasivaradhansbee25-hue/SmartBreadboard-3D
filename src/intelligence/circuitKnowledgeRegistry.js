@@ -292,34 +292,77 @@ const BUILT_IN_CIRCUITS = [
     }
   },
 
-  // 8. RLC Resonant Tank (AC / Resonant) — Model Gate
+  // 8. Series RLC Resonant Circuit (Phase 26 Verified AC Engine)
   {
-    circuitType: 'RLC_RESONANT_TANK',
-    displayName: 'RLC Resonant Tank',
+    circuitType: 'RLC_SERIES_RESONANCE',
+    displayName: 'Series RLC Resonant Circuit',
     category: CIRCUIT_CATEGORIES.AC,
-    description: 'A combined inductor-capacitor-resistor resonant circuit exhibiting sharp frequency selectivity at natural frequency f0.',
+    description: 'A series resistor, inductor, and capacitor configuration exhibiting minimum impedance (Z ≈ R), maximum current, and zero phase angle at resonant frequency f0.',
     requiredComponents: [
+      { role: 'resistor', type: 'resistor', minCount: 1, maxCount: 1, label: 'Damping / Series Resistor (R)' },
       { role: 'inductor', type: 'inductor', minCount: 1, maxCount: 1, label: 'Resonant Inductor (L)' },
-      { role: 'capacitor', type: 'capacitor', minCount: 1, maxCount: 1, label: 'Tuning Capacitor (C)' },
-      { role: 'damping_resistor', type: 'resistor', minCount: 1, maxCount: 1, label: 'Damping / Series Resistor (R)' }
+      { role: 'capacitor', type: 'capacitor', minCount: 1, maxCount: 1, label: 'Tuning Capacitor (C)' }
     ],
-    optionalComponents: [],
+    optionalComponents: [
+      { role: 'jumper', type: 'wire', label: 'Connecting Jumper' }
+    ],
     topologyRequirements: {
       minInductors: 1,
       minCapacitors: 1,
+      minResistors: 1,
+      seriesConnection: true,
       rules: [
-        'L and C connected in resonant loop',
-        'Requires dynamic AC solver for full impedance resonance simulation'
+        'R, L, and C connected in a continuous series branch',
+        'At resonance f0 = 1 / (2π√(LC)), inductive reactance XL cancels capacitive reactance XC (XL = XC)',
+        'Impedance reaches minimum |Z| = R, loop current reaches maximum I = Vin / R',
+        'Quality factor Q = (ω0 × L) / R, Bandwidth BW = f0 / Q'
       ]
     },
-    electricalModel: 'RLC_THEORETICAL_MODEL',
-    requiredParameters: ['l', 'c', 'r'],
+    electricalModel: 'RLC_SERIES_AC_MODEL',
+    requiredParameters: ['r', 'l', 'c'],
     visualizationType: VISUALIZATION_TYPES.RESONANCE_CURVE,
     explanationTemplate: {
-      governingLaw: "Resonant Energy Exchange & Quality Factor",
-      formulaSummary: "f0 = 1 / (2π × √(L × C)),  Q = (1/R) × √(L/C)",
-      purpose: "Filters or isolates a specific frequency band from incoming signals.",
-      application: "Radio tuning circuits, bandpass filters, wireless power transmission."
+      governingLaw: "Reactance Cancellation & Series Resonance",
+      formulaSummary: "f0 = 1 / (2π√(LC)),  Q = (ω0 × L) / R,  BW = R / (2πL)",
+      purpose: "Acts as a bandpass filter or frequency selector, passing maximum current at f0.",
+      application: "Radio tuning front-ends, antenna matching networks, intermediate frequency filters."
+    }
+  },
+
+  // 8b. Parallel RLC Resonant Tank
+  {
+    circuitType: 'RLC_PARALLEL_RESONANCE',
+    displayName: 'Parallel RLC Resonant Tank',
+    category: CIRCUIT_CATEGORIES.AC,
+    description: 'A parallel resistor, inductor, and capacitor tank exhibiting maximum impedance (Z ≈ R), minimum line current, and zero phase angle at resonant frequency f0.',
+    requiredComponents: [
+      { role: 'resistor', type: 'resistor', minCount: 1, maxCount: 1, label: 'Tank Parallel Resistor (R)' },
+      { role: 'inductor', type: 'inductor', minCount: 1, maxCount: 1, label: 'Tank Inductor (L)' },
+      { role: 'capacitor', type: 'capacitor', minCount: 1, maxCount: 1, label: 'Tank Capacitor (C)' }
+    ],
+    optionalComponents: [
+      { role: 'jumper', type: 'wire', label: 'Connecting Jumper' }
+    ],
+    topologyRequirements: {
+      minInductors: 1,
+      minCapacitors: 1,
+      minResistors: 1,
+      parallelConnection: true,
+      rules: [
+        'R, L, and C connected in parallel across shared node pair',
+        'At resonance f0 = 1 / (2π√(LC)), inductive susceptance BL cancels capacitive susceptance BC (BL = BC)',
+        'Impedance reaches maximum |Z| = R, supply current reaches minimum',
+        'Quality factor Q = R × √(C/L), Bandwidth BW = f0 / Q'
+      ]
+    },
+    electricalModel: 'RLC_PARALLEL_AC_MODEL',
+    requiredParameters: ['r', 'l', 'c'],
+    visualizationType: VISUALIZATION_TYPES.RESONANCE_CURVE,
+    explanationTemplate: {
+      governingLaw: "Susceptance Cancellation & Parallel Resonance",
+      formulaSummary: "f0 = 1 / (2π√(LC)),  Q = R × √(C/L),  BW = f0 / Q",
+      purpose: "Acts as a bandstop/notch filter or high-impedance load for RF amplifiers.",
+      application: "LC oscillators, RF power amplifiers, harmonic trap filters."
     }
   },
 
