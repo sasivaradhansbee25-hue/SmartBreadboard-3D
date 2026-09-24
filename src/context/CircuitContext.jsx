@@ -380,6 +380,62 @@ export function CircuitProvider({ children }) {
     }
   };
 
+  const applyBackendCorrection = useCallback((correctionResult) => {
+    if (!correctionResult || correctionResult.status !== 'APPLIED') return false;
+
+    const newCircuit = correctionResult.circuit || activeCircuit;
+    
+    // Invalidate stale simulation results immediately per Phase 21.1 Rule 8
+    setSimulationResult(null);
+    setMeasurements({});
+    setSolverStatus('NOT_RUN');
+    setSolverError(null);
+
+    setActiveCircuit(newCircuit);
+    pushHistorySnapshot(newCircuit);
+    return true;
+  }, [activeCircuit, pushHistorySnapshot]);
+
+  const updateComponentTerminals = useCallback((componentId, hole1, hole2) => {
+    if (!activeCircuit) return;
+
+    const updatedComponents = (activeCircuit.components || []).map(comp => {
+      const cid = comp.id || comp.designator;
+      if (cid === componentId) {
+        return {
+          ...comp,
+          start_hole: hole1,
+          end_hole: hole2,
+          hole1: hole1,
+          hole2: hole2,
+          node1: hole1,
+          node2: hole2,
+          terminals: {
+            terminal_a: { hole: hole1, node_id: hole1, ambiguous: false },
+            terminal_b: { hole: hole2, node_id: hole2, ambiguous: false }
+          },
+          verified: true,
+          verification: 'VERIFIED',
+          user_override_terminals: true
+        };
+      }
+      return comp;
+    });
+
+    const updatedCircuit = {
+      ...activeCircuit,
+      components: updatedComponents
+    };
+
+    // Invalidate simulation on manual terminal update
+    setSimulationResult(null);
+    setMeasurements({});
+    setSolverStatus('NOT_RUN');
+
+    setActiveCircuit(updatedCircuit);
+    pushHistorySnapshot(updatedCircuit);
+  }, [activeCircuit, pushHistorySnapshot]);
+
   // 5. What-If Simulation Engine
   const startWhatIf = async (targetComp, candidateVal) => {
     if (!activeCircuit || !targetComp) return;
@@ -557,6 +613,8 @@ export function CircuitProvider({ children }) {
       setIsEditMode,
       applyDigitalComponentValue,
       addManualResistor,
+      updateComponentTerminals,
+      applyBackendCorrection,
       addDigitalWire,
       removeDigitalWire,
       undoDigitalEdit,

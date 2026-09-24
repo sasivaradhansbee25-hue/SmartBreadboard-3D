@@ -80,6 +80,47 @@ class CircuitSimulateRequest(BaseModel):
     timestep: Optional[float] = 0.0001
     simulation_mode: Optional[str] = "transient"
 
+class CircuitIntelligenceRequest(BaseModel):
+    image_base64: Optional[str] = None
+    detections: Optional[List[Dict[str, Any]]] = None
+    power_source: Optional[Dict[str, Any]] = None
+
+class CircuitTopologyRequest(BaseModel):
+    netlist: Dict[str, Any]
+
+class CircuitToolCallRequest(BaseModel):
+    tool_name: str
+    tool_args: Optional[Dict[str, Any]] = {}
+    circuit_state: Dict[str, Any]
+
+class AssistantChatRequest(BaseModel):
+    message: str
+    conversation_id: Optional[str] = "default"
+    circuit_state: Optional[Dict[str, Any]] = None
+    reset_history: Optional[bool] = False
+
+class CircuitCorrectionRequest(BaseModel):
+    circuit_state: Dict[str, Any]
+    proposal_id: Optional[str] = None
+    diagnostic_id: Optional[str] = None
+    circuit_signature: Optional[str] = None
+    created_at: Optional[float] = None
+    correction_type: Optional[str] = "TERMINAL_HOLE_REMAP"
+    component_id: str
+    terminal: Optional[str] = None
+    hole1: Optional[str] = None
+    hole2: Optional[str] = None
+    hole_id: Optional[str] = None
+    type: Optional[str] = None
+    value: Optional[Any] = None
+    unit: Optional[str] = "Ω"
+    user_override_type: Optional[str] = None
+    user_override_value: Optional[Any] = None
+    user_confirmed: Optional[bool] = True
+    confirmation_token: Optional[str] = None
+    candidate_evidence: Optional[bool] = False
+    user_explicit_remap: Optional[bool] = False
+
 @app.get("/")
 def read_root():
     return {
@@ -291,6 +332,8 @@ def analyze_camera_frame(req: CameraFrameRequest):
         "registration": registration,
         "annotated_image": api_res.get("annotated_image"),
         "vision_verification": api_res.get("vision_verification", {}),
+        "topology": api_res.get("topology", {}),
+        "circuit_intelligence": api_res.get("circuit_intelligence", {}),
         "tracking_summary": {
             "detected_count": detected_count,
             "tracked_count": tracked_count,
@@ -299,6 +342,82 @@ def analyze_camera_frame(req: CameraFrameRequest):
         },
         "disclaimer": "Simulation result — calculated from reconstructed topology and source conditions."
     }
+
+# 6c. POST /api/circuit/intelligence (Phase 19 Circuit Intelligence Endpoint)
+@app.post("/api/circuit/intelligence")
+def get_circuit_intelligence_endpoint(req: CircuitIntelligenceRequest):
+    from core.circuit_intelligence import verify_and_build_circuit_intelligence
+    
+    candidates = req.detections
+    if not candidates and req.image_base64:
+        from cv.yolo_detector import detect_components_yolo
+        det_res = detect_components_yolo(req.image_base64)
+        candidates = det_res.get("detections", [])
+    
+    if not candidates:
+        candidates = []
+        
+    res = verify_and_build_circuit_intelligence(candidates, power_source=req.power_source)
+    return res
+
+# 6d. POST /api/circuit/topology (Phase 19 Series/Parallel Topology Analysis Endpoint)
+@app.post("/api/circuit/topology")
+def get_circuit_topology_endpoint(req: CircuitTopologyRequest):
+    from core.circuit_intelligence import ElectricalNodeGraph, TopologyAnalyzer
+    netlist = req.netlist or {}
+    comps = netlist.get("components", [])
+    
+    graph_builder = ElectricalNodeGraph()
+    for c in comps:
+        graph_builder.add_component(c)
+    ng = graph_builder.build_graph()
+    
+    analyzer = TopologyAnalyzer(ng, comps)
+    topo = analyzer.analyze()
+    return {
+        "status": "success",
+        "topology": topo,
+        "node_graph": ng
+    }
+
+# 6e. POST /api/circuit/tools/call (Phase 19.13 LLM Agent Deterministic Tool Execution)
+@app.post("/api/circuit/tools/call")
+def call_circuit_tool_endpoint(req: CircuitToolCallRequest):
+    from core.circuit_tools import execute_circuit_tool
+    return execute_circuit_tool(req.tool_name, req.tool_args or {}, req.circuit_state)
+
+# 6f. POST /api/assistant/chat (Phase 20 LLM Circuit Assistant Endpoint)
+@app.post("/api/assistant/chat")
+def assistant_chat_endpoint(req: AssistantChatRequest):
+    from llm.agent import get_agent_for_session
+    
+    agent = get_agent_for_session(req.conversation_id)
+    if req.reset_history:
+        agent.reset()
+        
+    circuit_state = req.circuit_state or {}
+    res = agent.process_message(req.message, circuit_state)
+    return res
+
+# 6g. POST /api/circuit/correction/apply (Phase 21.1 Deterministic Correction Application Endpoint)
+@app.post("/api/circuit/correction/apply")
+def apply_circuit_correction_endpoint(req: CircuitCorrectionRequest):
+    from core.correction_engine import validate_and_apply_correction
+    corr_payload = req.model_dump()
+    circuit_state = corr_payload.pop("circuit_state", {})
+    return validate_and_apply_correction(circuit_state, corr_payload)
+
+# 6h. GET & POST /api/circuit/visual-grounding (Phase 22.1 Visual Grounding State Endpoint)
+@app.get("/api/circuit/visual-grounding")
+def get_visual_grounding_get_endpoint():
+    from core.visual_grounding import build_visual_grounding_state
+    # Default empty or base ground state
+    return build_visual_grounding_state({})
+
+@app.post("/api/circuit/visual-grounding")
+def get_visual_grounding_post_endpoint(req: Dict[str, Any]):
+    from core.visual_grounding import build_visual_grounding_state
+    return build_visual_grounding_state(req)
 
 
 # 7. POST /api/calculate/resistance (Rule 4 Separate R Endpoint)

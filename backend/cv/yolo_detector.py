@@ -341,10 +341,23 @@ def detect_and_annotate_components(image_input: bytes | str, conf_threshold: flo
         rejected_candidates = verification_result.get("rejected", [])
         all_candidates = verification_result.get("all_candidates", [])
 
+        # Step 2b: Circuit Intelligence & Topology Reasoning Engine (Phase 19)
+        from core.circuit_intelligence import verify_and_build_circuit_intelligence
+        intel_res = verify_and_build_circuit_intelligence(
+            candidates=formatted_detections,
+            img_w=img_w,
+            img_h=img_h
+        )
+        topology_result = intel_res.get("topology", {})
+        node_graph = intel_res.get("node_graph", {})
+        component_intel = intel_res.get("component_intelligence", [])
+
         # Step 3: Generate electrical netlist & hole mapping ONLY for VERIFIED components
         netlist = build_netlist_from_detections(verified_candidates, img_w=img_w, img_h=img_h)
         mapped_components = list(netlist.get("components", []))
         nets_summary = netlist.get("nets_summary", [])
+        netlist["topology"] = topology_result
+        netlist["node_graph"] = node_graph
 
         # Step 3b: Append UNKNOWN components to mapped_components for Phase 17 Manual Recovery
         for unk in unknown_candidates:
@@ -436,6 +449,14 @@ def detect_and_annotate_components(image_input: bytes | str, conf_threshold: flo
             "mapped_components": mapped_components,
             "netlist": netlist,
             "nets_summary": nets_summary,
+            "topology": topology_result,
+            "node_graph": node_graph,
+            "circuit_intelligence": {
+                "component_intelligence": component_intel,
+                "node_graph": node_graph,
+                "topology": topology_result,
+                "summary": intel_res.get("summary", {})
+            },
             "electrical_analysis": formatted_sim,
             "simulationResult": formatted_sim,
             "annotated_image": f"data:image/jpeg;base64,{ann_b64}",

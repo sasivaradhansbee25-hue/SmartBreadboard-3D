@@ -12,6 +12,7 @@ import {
   formatPower
 } from '../utils/electricalFormatter';
 import ARInteractiveInspector from './ARInteractiveInspector';
+import VisualCircuitAnnotations from './VisualCircuitAnnotations';
 import {
   Eye,
   Zap,
@@ -38,7 +39,11 @@ export default function ARCameraOverlay({
   videoHeight = 720,
   isActive = true,
   onOpenEditModal = null,
-  onOpenWhatIfModal = null
+  onOpenWhatIfModal = null,
+  visualGroundingState = null,
+  highlightedComponentId = null,
+  showAnnotationOverlay = true,
+  onAskAI = null
 }) {
   const {
     activeCircuit,
@@ -481,6 +486,12 @@ export default function ARCameraOverlay({
 
   const selectedElec = getComponentElectrical(selectedComponent);
 
+  const containerW = containerRef?.current?.clientWidth || 800;
+  const containerH = containerRef?.current?.clientHeight || 520;
+  const vWidth = (videoRef?.current && videoRef.current.videoWidth > 0) ? videoRef.current.videoWidth : videoWidth;
+  const vHeight = (videoRef?.current && videoRef.current.videoHeight > 0) ? videoRef.current.videoHeight : videoHeight;
+  const currentDisplayRect = calculateVideoDisplayRect(containerW, containerH, vWidth, vHeight, 'contain');
+
   return (
     <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
       {/* AR Interactive Canvas Layer */}
@@ -495,8 +506,33 @@ export default function ARCameraOverlay({
         }}
       />
 
+      {/* Phase 22.2 Verified Visual Circuit Annotations Layer */}
+      {showAnnotationOverlay && visualGroundingState && arEnabled && (
+        <VisualCircuitAnnotations
+          visualGroundingState={visualGroundingState}
+          displayRect={currentDisplayRect}
+          containerWidth={containerW}
+          containerHeight={containerH}
+          selectedComponentId={selectedComponent?.id || selectedComponent?.designator}
+          highlightedComponentId={highlightedComponentId}
+          onSelectComponent={(comp) => {
+            const elec = getComponentElectrical(comp);
+            const packaged = {
+              ...comp,
+              name: comp.label || comp.id,
+              electrical: elec,
+              solver_status: simulationResult?.solver_status || solverStatus
+            };
+            setSelectedComponent(packaged);
+          }}
+          currentCircuitSignature={visualGroundingState?.circuit_signature}
+          onAskAI={onAskAI}
+          showControls={true}
+        />
+      )}
+
       {/* Interactive AR Component Inspector */}
-      {selectedComponent && arEnabled && (
+      {selectedComponent && arEnabled && !visualGroundingState && (
         <ARInteractiveInspector
           component={selectedComponent}
           electrical={selectedElec}

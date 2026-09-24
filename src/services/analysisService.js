@@ -231,3 +231,45 @@ function generateLocalTransientAnalysis(circuit, duration = 0.01, timestep = 0.0
 
 function max(a, b) { return a > b ? a : b; }
 function round(val, dec) { const p = Math.pow(10, dec); return Math.round(val * p) / p; }
+
+export async function requestAssistantChat(message, circuitState, conversationId = 'default', resetHistory = false) {
+  try {
+    const res = await apiRequest('/assistant/chat', 'POST', {
+      message: message,
+      conversation_id: conversationId,
+      circuit_state: circuitState,
+      reset_history: resetHistory
+    });
+    return res;
+  } catch (err) {
+    return {
+      answer: "Assistant temporarily unavailable. Please verify backend service.",
+      tool_calls: [],
+      error: String(err)
+    };
+  }
+}
+
+export async function applyCircuitCorrection(correctionPayload) {
+  try {
+    const res = await apiRequest('/circuit/correction/apply', 'POST', correctionPayload);
+    return res;
+  } catch (err) {
+    return {
+      status: "BLOCKED",
+      reason: `Backend correction failed: ${err.message || String(err)}`
+    };
+  }
+}
+
+export async function requestVisualGrounding(circuitState) {
+  try {
+    const res = await apiRequest('/circuit/visual-grounding', 'POST', circuitState || {});
+    return res;
+  } catch (err) {
+    console.warn("[analysisService] Visual grounding request failed:", err);
+    return null;
+  }
+}
+
+

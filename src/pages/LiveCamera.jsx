@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useCircuit } from '../context/CircuitContext';
-import { requestLiveCameraAnalysis } from '../services/analysisService';
+import { requestLiveCameraAnalysis, applyCircuitCorrection } from '../services/analysisService';
 import { API_BASE_URL, FRONTEND_BASE_URL, WS_BASE_URL } from '../services/api';
 import { getIceServers } from '../config/webrtc';
 import { computeCircuitSignature, hasCircuitTopologyChanged } from '../utils/circuitSignature';
@@ -15,7 +15,9 @@ import UserCorrectionModal from '../components/UserCorrectionModal';
 import ARCameraOverlay from '../components/ARCameraOverlay';
 import DigitalChangeConfirmModal from '../components/DigitalChangeConfirmModal';
 import WhatIfComparisonModal from '../components/WhatIfComparisonModal';
-import { Camera, CameraOff, RefreshCw, Zap, Layers, Smartphone, Monitor, QrCode, Wifi, CheckCircle2, Download, Upload, Sparkles, ShieldCheck } from 'lucide-react';
+import CircuitAssistant from '../components/CircuitAssistant';
+import VisualGroundingPanel from '../components/VisualGroundingPanel';
+import { Camera, CameraOff, RefreshCw, Zap, Layers, Smartphone, Monitor, QrCode, Wifi, CheckCircle2, Download, Upload, Sparkles, ShieldCheck, Cpu, MessageSquare, Eye } from 'lucide-react';
 
 export default function LiveCamera() {
   const {
@@ -24,12 +26,16 @@ export default function LiveCamera() {
     measurements,
     setMeasurements,
     solverStatus,
+    setSolverStatus,
     solverError,
     simulationResult,
+    setSimulationResult,
     runElectricalAnalysis,
     setSelectedComponent,
     simulationSource,
     applyDigitalComponentValue,
+    updateComponentTerminals,
+    applyBackendCorrection,
     startWhatIf,
     applyWhatIfToCircuit,
     cancelWhatIf,
@@ -80,6 +86,116 @@ export default function LiveCamera() {
     all_candidates: []
   });
   const [showVisionDebug, setShowVisionDebug] = useState(false);
+
+  // Phase 19: Circuit Intelligence & Topology State
+  const [circuitIntelligence, setCircuitIntelligence] = useState({
+    component_intelligence: [],
+    node_graph: { nodes: [], components: [] },
+    topology: { status: 'VALID', series_count: 0, parallel_count: 0, series_groups: [], parallel_groups: [], short_circuits: [] },
+    summary: {}
+  });
+
+  // Phase 20: LLM Circuit Assistant State
+  const [showAssistant, setShowAssistant] = useState(false);
+  // Phase 22.1: Visual Grounding State
+  const [showVisualGrounding, setShowVisualGrounding] = useState(false);
+  // Phase 22.2: Highlighted Component State
+  const [highlightedComponentId, setHighlightedComponentId] = useState(null);
+
+  // Deterministic Visual Grounding State Memoization
+  const currentVisualGroundingState = useMemo(() => {
+    const comps = (activeCircuit?.components || []).map(c => {
+      const cid = c.id || c.designator;
+      const tA = c.terminals?.terminal_a || {};
+      const tB = c.terminals?.terminal_b || {};
+      const h1 = c.hole1 || c.start_hole || tA.hole;
+      const h2 = c.hole2 || c.end_hole || tB.hole;
+      const isAmbig = h1 === 'AMBIGUOUS' || h2 === 'AMBIGUOUS';
+      const isUnknown = c.verification === 'UNKNOWN' || c.type === 'unknown';
+      const isUserConf = c.source === 'USER_CONFIRMED' || c.user_override_value != null;
+
+      let status = 'VERIFIED';
+      if (isUnknown) status = 'UNKNOWN';
+      else if (isAmbig) status = 'AMBIGUOUS';
+      else if (isUserConf) status = 'USER_CONFIRMED';
+
+      return {
+        id: cid,
+        designator: cid,
+        type: c.type || 'resistor',
+        value: c.value,
+        unit: c.unit || 'Ω',
+        display_value: c.displayValue || c.formatted_value || c.user_override_value || `${c.value || ''} ${c.unit || 'Ω'}`.trim() || 'Unknown',
+        status: status,
+        source: c.source || 'ai',
+        verified: (status === 'VERIFIED' || status === 'USER_CONFIRMED'),
+        terminals: {
+          terminal_a: {
+            name: 'terminal_a',
+            hole: h1 && h1 !== 'AMBIGUOUS' && h1 !== 'UNKNOWN' ? h1 : null,
+            status: isAmbig ? 'AMBIGUOUS' : (isUnknown ? 'UNKNOWN' : (isUserConf ? 'USER_CONFIRMED' : 'VERIFIED')),
+            pixel: tA.pixel || c.t1_img || null,
+            electrical_node: c.node1 || tA.electrical_node || (h1 ? `NODE_HOLE_${h1}` : null)
+          },
+          terminal_b: {
+            name: 'terminal_b',
+            hole: h2 && h2 !== 'AMBIGUOUS' && h2 !== 'UNKNOWN' ? h2 : null,
+            status: isAmbig ? 'AMBIGUOUS' : (isUnknown ? 'UNKNOWN' : (isUserConf ? 'USER_CONFIRMED' : 'VERIFIED')),
+            pixel: tB.pixel || c.t2_img || null,
+            electrical_node: c.node2 || tB.electrical_node || (h2 ? `NODE_HOLE_${h2}` : null)
+          }
+        },
+        image_geometry: {
+          bbox: c.bbox || c.bbox_pixels || [],
+          center: c.center || (c.center_x !== undefined && c.center_y !== undefined ? [c.center_x, c.center_y] : null)
+        }
+      };
+    });
+
+    const canonicalHoles = {};
+    comps.forEach(c => {
+      const h1 = c.terminals?.terminal_a?.hole;
+      const h2 = c.terminals?.terminal_b?.hole;
+      if (h1) canonicalHoles[h1] = { hole: h1, status: 'VERIFIED', pixel: c.terminals.terminal_a.pixel };
+      if (h2) canonicalHoles[h2] = { hole: h2, status: 'VERIFIED', pixel: c.terminals.terminal_b.pixel };
+    });
+
+    const simComps = simulationResult?.components || [];
+    const simCurrents = {};
+    const simPowers = {};
+    simComps.forEach(sc => {
+      const scid = sc.id || sc.designator;
+      if (scid) {
+        simCurrents[scid] = sc.current;
+        simPowers[scid] = sc.power;
+      }
+    });
+
+    return {
+      schema_version: '22.1',
+      circuit_signature: computeCircuitSignature(activeCircuit || {}),
+      overall_status: activeCircuit?.validity?.status === 'PASS' ? 'VERIFIED' : 'PARTIALLY_VERIFIED',
+      summary: {
+        component_count: comps.length,
+        verified_components: comps.filter(c => c.verified).length,
+        wires_count: (activeCircuit?.wires || []).length,
+        simulation_status: solverStatus === 'SOLVED' ? 'SOLVED' : 'NOT_RUN'
+      },
+      components: comps,
+      wires: activeCircuit?.wires || [],
+      nodes: circuitIntelligence?.node_graph?.nodes || [],
+      canonical_holes: canonicalHoles,
+      diagnostics: [],
+      rejected_detections: visionVerification?.rejected || [],
+      simulation: {
+        status: solverStatus === 'SOLVED' ? 'SOLVED' : 'NOT_RUN',
+        source: 'MNA',
+        voltages: simulationResult?.node_voltages || {},
+        currents: simCurrents,
+        powers: simPowers
+      }
+    };
+  }, [activeCircuit, circuitIntelligence, visionVerification, simulationResult, solverStatus]);
 
   // Live Tracking Metrics State
   const [trackingMetrics, setTrackingMetrics] = useState({
@@ -578,6 +694,16 @@ export default function LiveCamera() {
 
         if (res.vision_verification) {
           setVisionVerification(res.vision_verification);
+        }
+
+        if (res.circuit_intelligence) {
+          setCircuitIntelligence(res.circuit_intelligence);
+        } else if (res.topology) {
+          setCircuitIntelligence(prev => ({
+            ...prev,
+            topology: res.topology,
+            node_graph: res.node_graph || prev.node_graph
+          }));
         }
 
         setDetections(res.mapped_components || res.detections || []);
@@ -1106,6 +1232,168 @@ export default function LiveCamera() {
         </div>
       )}
 
+      {/* Phase 19: Circuit Intelligence & Topology Reasoning HUD */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '0.6rem',
+        background: 'rgba(15, 23, 42, 0.90)',
+        padding: '0.45rem 0.9rem',
+        borderRadius: '6px',
+        border: '1px solid rgba(56, 189, 248, 0.25)',
+        marginBottom: '1rem',
+        fontSize: '0.80rem'
+      }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            <Cpu size={14} /> CIRCUIT INTELLIGENCE & TOPOLOGY:
+          </span>
+          <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', background: '#1e293b', color: '#94a3b8' }}>
+            NODES <strong>{circuitIntelligence.node_graph?.nodes?.length || 0}</strong>
+          </span>
+          <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>
+            SERIES <strong>{circuitIntelligence.topology?.series_count || 0}</strong>
+          </span>
+          <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(168, 85, 247, 0.15)', color: '#c084fc' }}>
+            PARALLEL <strong>{circuitIntelligence.topology?.parallel_count || 0}</strong>
+          </span>
+          <span style={{
+            padding: '0.15rem 0.45rem',
+            borderRadius: '4px',
+            background: circuitIntelligence.topology?.status === 'VALID' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+            color: circuitIntelligence.topology?.status === 'VALID' ? '#34d399' : '#f87171',
+            fontWeight: 700
+          }}>
+            TOPOLOGY: {circuitIntelligence.topology?.status || 'VALID'}
+          </span>
+          <span style={{
+            padding: '0.15rem 0.45rem',
+            borderRadius: '4px',
+            background: activeCircuit?.validity?.status === 'VALID' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+            color: activeCircuit?.validity?.status === 'VALID' ? '#34d399' : '#f87171',
+            fontWeight: 700
+          }}>
+            NETLIST: {activeCircuit?.validity?.status === 'VALID' ? 'READY' : 'BLOCKED'}
+          </span>
+        </div>
+
+        <button
+          onClick={() => setShowAssistant(!showAssistant)}
+          style={{
+            background: showAssistant ? '#6366f1' : 'rgba(99, 102, 241, 0.20)',
+            color: showAssistant ? '#ffffff' : '#c7d2fe',
+            border: '1px solid #6366f1',
+            borderRadius: '5px',
+            padding: '0.25rem 0.65rem',
+            fontSize: '0.78rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.35rem',
+            transition: 'all 0.2s ease'
+          }}
+        >
+          <MessageSquare size={14} />
+          {showAssistant ? 'Hide Circuit Assistant' : '💬 Circuit Assistant'}
+        </button>
+
+        <button
+          onClick={() => setShowVisualGrounding(!showVisualGrounding)}
+          style={{
+            background: showVisualGrounding ? '#0ea5e9' : 'rgba(14, 165, 233, 0.20)',
+            color: showVisualGrounding ? '#ffffff' : '#7dd3fc',
+            border: '1px solid #0ea5e9',
+            borderRadius: '5px',
+            padding: '0.25rem 0.65rem',
+            fontSize: '0.78rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.35rem',
+            transition: 'all 0.2s ease'
+          }}
+        >
+          <Eye size={14} />
+          {showVisualGrounding ? 'Hide Visual Grounding' : '👁️ Visual Grounding'}
+        </button>
+      </div>
+
+      {/* Phase 20: Circuit Assistant Drawer / Panel */}
+      {showAssistant && (
+        <div style={{ marginBottom: '1.25rem' }}>
+          <CircuitAssistant
+            circuitContext={{
+              components: activeCircuit?.components || [],
+              topology: circuitIntelligence?.topology || {},
+              node_graph: circuitIntelligence?.node_graph || {},
+              solverStatus: solverStatus,
+              simulationResult: simulationResult,
+              measurements: measurements,
+              validity: activeCircuit?.validity || { status: 'VALID' },
+              sources: activeCircuit?.power_sources || activeCircuit?.sources || (simulationSource ? [{
+                id: "V_SIMULATED",
+                type: simulationSource.type || "dc_voltage",
+                voltage: parseFloat(simulationSource.value || 12.0),
+                positive_node: simulationSource.positiveNode,
+                negative_node: simulationSource.negativeNode,
+                source: "user_simulated"
+              }] : [])
+            }}
+            onSimulationUpdate={(simResult) => {
+              if (simResult && simResult.success) {
+                setSimulationResult(simResult);
+                setSolverStatus(simResult.solver_status || 'SOLVED');
+                if (simResult.measurements) {
+                  setMeasurements(simResult.measurements);
+                }
+              }
+            }}
+            onClose={() => setShowAssistant(false)}
+            onHighlightComponent={(cid) => setHighlightedComponentId(cid)}
+            onApplyCorrection={async (payload, sugg) => {
+              if (!payload) return { status: 'BLOCKED', reason: 'Missing correction payload' };
+              
+              const res = await applyCircuitCorrection({
+                ...payload,
+                circuit_state: activeCircuit || {}
+              });
+
+              if (res && res.status === 'APPLIED') {
+                applyBackendCorrection(res);
+                const cid = res.component_id || payload.component_id;
+                const h1 = res.updated_terminals?.terminal_a || payload.hole1;
+                const h2 = res.updated_terminals?.terminal_b || payload.hole2;
+                setLatestToast({
+                  type: 'success',
+                  message: `Verified mapping applied for ${cid} (${h1} → ${h2}). Simulation invalidated.`
+                });
+                return res;
+              } else {
+                setLatestToast({
+                  type: 'error',
+                  message: `Correction blocked: ${res?.reason || 'Validation checks failed'}`
+                });
+                return res || { status: 'BLOCKED', reason: 'Backend validation failed' };
+              }
+            }}
+          />
+        </div>
+      )}
+
+      {/* Phase 22.1: Visual Grounding Inspection Panel */}
+      {showVisualGrounding && (
+        <div style={{ marginBottom: '1.25rem' }}>
+          <VisualGroundingPanel
+            visualGrounding={currentVisualGroundingState}
+            onClose={() => setShowVisualGrounding(false)}
+          />
+        </div>
+      )}
+
       {/* Main Split Grid (Live Camera | 3D Digital Twin) */}
       <div style={{
         display: 'grid',
@@ -1265,6 +1553,9 @@ export default function LiveCamera() {
               isActive={(cameraActive || isDemoMode)}
               onOpenEditModal={(c) => setValueModalComp(c)}
               onOpenWhatIfModal={(c) => handleOpenWhatIfPrompt(c)}
+              visualGroundingState={currentVisualGroundingState}
+              highlightedComponentId={highlightedComponentId}
+              onAskAI={(targetId) => setShowAssistant(true)}
             />
 
             {/* Phone Camera QR Pairing Screen (Shown when PHONE CAMERA is selected and phone is not yet streaming) */}

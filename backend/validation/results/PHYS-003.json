@@ -1,0 +1,105 @@
+{
+  "case_id": "PHYS-003",
+  "circuit_name": "Series_Resistor_Network",
+  "description": "5V DC source driving 3 series resistors: R1(220\u03a9), R2(330\u03a9), R3(470\u03a9).",
+  "status": "NOT_TESTED",
+  "timestamp": "2026-09-24T11:02:45.368161Z",
+  "components": [
+    {
+      "id": "R1",
+      "type": "resistor",
+      "nominal_value": 220.0,
+      "measured_value": null,
+      "unit": "\u03a9",
+      "start_hole": "E10",
+      "end_hole": "E15",
+      "tolerance_percent": 5.0,
+      "notes": ""
+    },
+    {
+      "id": "R2",
+      "type": "resistor",
+      "nominal_value": 330.0,
+      "measured_value": null,
+      "unit": "\u03a9",
+      "start_hole": "E15",
+      "end_hole": "E20",
+      "tolerance_percent": 5.0,
+      "notes": ""
+    },
+    {
+      "id": "R3",
+      "type": "resistor",
+      "nominal_value": 470.0,
+      "measured_value": null,
+      "unit": "\u03a9",
+      "start_hole": "E20",
+      "end_hole": "E25",
+      "tolerance_percent": 5.0,
+      "notes": ""
+    }
+  ],
+  "connections": [],
+  "power_source": {
+    "type": "DC",
+    "nominal_voltage_v": 5.0,
+    "measured_voltage_v": null,
+    "current_limit_ma": 500.0,
+    "positive_hole": "E10",
+    "ground_hole": "E25"
+  },
+  "camera": {
+    "camera_device": "Webcam 1080p",
+    "resolution": "1920x1080",
+    "frame_rate_fps": 30.0,
+    "distance_cm": 25.0,
+    "viewing_angle": "front",
+    "lighting_condition": "indoor_bench_led",
+    "breadboard_orientation": "horizontal"
+  },
+  "tolerance_spec": {
+    "resistor_tolerance_percent": 5.0,
+    "multimeter_voltage_accuracy_percent": 0.5,
+    "multimeter_current_accuracy_percent": 1.0,
+    "power_supply_tolerance_percent": 2.0,
+    "breadboard_contact_resistance_ohms": 0.05,
+    "led_forward_voltage_spread_v": 0.2
+  },
+  "physical_measurements": {
+    "v_supply_measured_v": null,
+    "v_resistor_measured_v": null,
+    "v_led_measured_v": null,
+    "i_circuit_measured_ma": null,
+    "r_total_measured_ohms": null,
+    "temperature_c": 24.0
+  },
+  "software_results": {
+    "components_detected": [],
+    "holes_mapped": {},
+    "netlist_extracted": {},
+    "mna_node_voltages": {},
+    "mna_branch_currents_ma": {},
+    "mna_total_power_mw": 0.0,
+    "ar_alignment_status": "NOT_MEASURED",
+    "ai_grounding_verified": false,
+    "ai_responses": []
+  },
+  "comparison": {
+    "detection_tp": 0,
+    "detection_fp": 0,
+    "detection_fn": 0,
+    "detection_precision": "INSUFFICIENT_DATA",
+    "detection_recall": "INSUFFICIENT_DATA",
+    "terminal_mapping_accuracy": "INSUFFICIENT_DATA",
+    "hole_mapping_accuracy": "INSUFFICIENT_DATA",
+    "netlist_match": false,
+    "v_error_abs_v": null,
+    "v_error_pct": "NOT_APPLICABLE",
+    "i_error_abs_ma": null,
+    "i_error_pct": "NOT_APPLICABLE",
+    "within_tolerance": false,
+    "tolerance_notes": [],
+    "discrepancies": []
+  },
+  "notes": ""
+}

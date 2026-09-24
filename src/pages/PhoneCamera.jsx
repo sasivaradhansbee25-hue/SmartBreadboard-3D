@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react';
 import { Camera, CameraOff, RefreshCw, Zap, CheckCircle2, AlertTriangle, ShieldCheck, Upload, Sparkles, Eye, Box, ArrowRight } from 'lucide-react';
 import { API_BASE_URL, WS_BASE_URL } from '../services/api';
 import { getIceServers } from '../config/webrtc';
@@ -405,7 +405,7 @@ export default function PhoneCamera() {
 
       {/* Main Content Body */}
       <main style={{ flex: 1, padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '600px', margin: '0 auto', width: '100%' }}>
-        
+
         {/* Session & WebRTC Connection Status Badge */}
         <div style={{
           background: '#0f172a',
