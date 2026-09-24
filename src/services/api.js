@@ -1,4 +1,4 @@
-import { API_BASE_URL, FRONTEND_BASE_URL, WS_BASE_URL } from '../config/api';
+import { API_BASE_URL, FRONTEND_BASE_URL, WS_BASE_URL } from '../config/api.js';
 
 export { API_BASE_URL, FRONTEND_BASE_URL, WS_BASE_URL };
 

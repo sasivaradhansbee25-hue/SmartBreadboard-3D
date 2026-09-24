@@ -11,6 +11,7 @@ import Simulator from './pages/Simulator';
 import Calculator from './pages/Calculator';
 import Results from './pages/Results';
 import Learn from './pages/Learn';
+import Validation from './pages/Validation';
 import PhoneCamera from './pages/PhoneCamera';
 
 export default function App() {
@@ -30,6 +31,7 @@ export default function App() {
                 <Route path="/calculator" element={<Calculator />} />
                 <Route path="/results" element={<Results />} />
                 <Route path="/learn" element={<Learn />} />
+                <Route path="/validation" element={<Validation />} />
               </Routes>
             </Layout>
           } />

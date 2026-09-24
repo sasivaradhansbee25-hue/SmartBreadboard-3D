@@ -9,7 +9,8 @@ import {
   Box, 
   Calculator, 
   FileCheck2, 
-  GraduationCap 
+  GraduationCap,
+  ShieldCheck
 } from 'lucide-react';
 
 export default function Navbar() {
@@ -21,7 +22,8 @@ export default function Navbar() {
     { path: '/simulator', label: 'Simulator', icon: Box },
     { path: '/calculator', label: 'Calculator', icon: Calculator },
     { path: '/results', label: 'Results', icon: FileCheck2 },
-    { path: '/learn', label: 'Learn', icon: GraduationCap }
+    { path: '/learn', label: 'Learn', icon: GraduationCap },
+    { path: '/validation', label: 'Validation', icon: ShieldCheck }
   ];
 
 
