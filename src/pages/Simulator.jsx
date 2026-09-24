@@ -10,6 +10,7 @@ import ComponentMeasurementCard from '../components/ComponentMeasurementCard';
 import LiveGraphInspector from '../components/LiveGraphInspector';
 import ValueInputModal from '../components/ValueInputModal';
 import UserCorrectionModal from '../components/UserCorrectionModal';
+import CircuitIntelligencePanel from '../components/Intelligence/CircuitIntelligencePanel';
 
 export default function Simulator() {
   const { activeCircuit, setMockCircuitData, loadDemoCircuit, solverStatus, solverError } = useCircuit();
@@ -166,6 +167,11 @@ export default function Simulator() {
           <Schematic2DRenderer circuit={activeCircuit} />
         </div>
       )}
+
+      {/* Phase 25: Context-Aware Circuit Intelligence & AR Learning Panel */}
+      <div style={{ marginBottom: '1.25rem' }}>
+        <CircuitIntelligencePanel />
+      </div>
 
       {/* Lower Dashboard: Component Measurement Card & Live Graph */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: '1.25rem', flexWrap: 'wrap' }}>

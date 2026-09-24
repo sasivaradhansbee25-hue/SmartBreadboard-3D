@@ -61,7 +61,8 @@ export default function ARCameraOverlay({
     redoDigitalEdit,
     resetDigitalChanges,
     canUndo,
-    canRedo
+    canRedo,
+    circuitIntelligence
   } = useCircuit();
 
   // AR Layer Feature Toggles
@@ -582,6 +583,37 @@ export default function ARCameraOverlay({
             <Sparkles size={14} />
             {arEnabled ? '✨ AR: ON' : 'AR: OFF'}
           </button>
+
+          {/* Phase 25 AR Circuit Intelligence Badge */}
+          {circuitIntelligence?.classification && (
+            <div
+              style={{
+                background: circuitIntelligence.classification.verificationState === 'VERIFIED'
+                  ? 'rgba(16, 185, 129, 0.2)'
+                  : 'rgba(30, 41, 59, 0.85)',
+                border: circuitIntelligence.classification.verificationState === 'VERIFIED'
+                  ? '1px solid #10b981'
+                  : '1px solid #475569',
+                color: circuitIntelligence.classification.verificationState === 'VERIFIED'
+                  ? '#34d399'
+                  : '#94a3b8',
+                borderRadius: '6px',
+                padding: '0.35rem 0.65rem',
+                fontSize: '0.74rem',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                boxShadow: circuitIntelligence.classification.verificationState === 'VERIFIED'
+                  ? '0 0 10px rgba(16, 185, 129, 0.3)'
+                  : 'none'
+              }}
+              title={circuitIntelligence.explanation?.summary || 'Circuit Intelligence'}
+            >
+              <Zap size={12} />
+              {circuitIntelligence.classification.displayName}
+            </div>
+          )}
 
           {/* Mode Switch: View Mode vs Edit Mode */}
           <button

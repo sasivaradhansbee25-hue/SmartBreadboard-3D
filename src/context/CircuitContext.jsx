@@ -1,8 +1,9 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { mockCircuits } from '../data/mockCircuits';
 import { demoCircuits } from '../data/demoCircuits';
 import { requestDcSimulation } from '../services/analysisService';
 import { parseComponentValue, formatEngineeringValue } from '../utils/valueParser';
+import { analyzeCircuitIntelligence } from '../intelligence/index.js';
 
 const CircuitContext = createContext(null);
 const MAX_HISTORY_LENGTH = 20;
@@ -55,6 +56,11 @@ export function CircuitProvider({ children }) {
     originalSimulationResult: null,
     whatIfSimulationResult: null
   });
+
+  // Phase 25: Reactive Context-Aware Circuit Intelligence & Topology Classification
+  const circuitIntelligence = useMemo(() => {
+    return analyzeCircuitIntelligence(activeCircuit, simulationResult);
+  }, [activeCircuit, simulationResult]);
 
   // 1. Solve circuit whenever activeCircuit or simulationSource changes
   useEffect(() => {
@@ -646,7 +652,8 @@ export function CircuitProvider({ children }) {
       selectedComponent,
       setSelectedComponent,
       timeSeriesData,
-      setTimeSeriesData
+      setTimeSeriesData,
+      circuitIntelligence
     }}>
       {children}
     </CircuitContext.Provider>
