@@ -862,13 +862,16 @@ def classify_circuit_endpoint(payload: Dict[str, Any]):
 # ===========================================================================
 
 @app.post("/api/ac/analyze")
+@app.post("/api/active/analyze")
 def analyze_ac_circuit_endpoint(payload: Dict[str, Any]):
     """
-    Executes complex MNA frequency response analysis, generalized transfer response H(jw),
-    Bode magnitude/phase spectrum, cutoff frequency extraction, and deterministic behavior classification.
+    Executes complex MNA frequency response analysis, active op-amp circuit analysis,
+    generalized transfer response H(jw), Bode magnitude/phase spectrum, cutoff frequency extraction,
+    and deterministic behavior classification.
     Scientific Integrity: is_measured is strictly False; source is 'mna_simulation'.
     """
     from circuit_solver.ac_intelligence import analyze_generalized_ac_circuit
+    from circuit_solver.active_circuit_analyzer import analyze_active_circuit, inspect_active_topology
 
     netlist = payload.get("netlist", payload)
     analysis_cfg = payload.get("analysis", {})
@@ -881,6 +884,45 @@ def analyze_ac_circuit_endpoint(payload: Dict[str, Any]):
 
     in_node = response_cfg.get("input_node") or response_cfg.get("inputNode")
     out_node = response_cfg.get("output_node") or response_cfg.get("outputNode")
+
+    # Check if active op-amp topology is present
+    active_topo = inspect_active_topology(netlist)
+    if active_topo.get("is_active_circuit"):
+        active_res = analyze_active_circuit(
+            netlist,
+            f_start=start_freq,
+            f_stop=stop_freq,
+            num_points=points
+        )
+        return {
+            "status": "success" if active_res.get("success") else "error",
+            "analysis_type": "ACTIVE_OPAMP_CIRCUIT",
+            "circuit_type": active_res.get("circuit_type"),
+            "circuitType": active_res.get("circuit_type"),
+            "display_name": active_res.get("display_name"),
+            "ic_model": active_res.get("ic_model"),
+            "icModel": active_res.get("ic_model"),
+            "pin_mapping": active_res.get("pin_mapping"),
+            "pinMapping": active_res.get("pin_mapping"),
+            "operating_state": active_res.get("operating_state"),
+            "operatingState": active_res.get("operating_state"),
+            "transfer_function": active_res.get("transfer_function"),
+            "transferFunction": active_res.get("transfer_function"),
+            "frequency_response": active_res.get("frequency_response"),
+            "frequencyResponse": active_res.get("frequency_response"),
+            "gain": active_res.get("gain"),
+            "phase": active_res.get("phase"),
+            "voltages": active_res.get("voltages"),
+            "feedback_network": active_res.get("feedback_network"),
+            "educational_explanation": active_res.get("educational_explanation"),
+            "visualization_state": active_res.get("visualization_state"),
+            "limitations": active_res.get("limitations"),
+            "source": "mna_simulation",
+            "is_measured": False,
+            "isMeasured": False,
+            "evidence": active_res.get("evidence"),
+            "error": active_res.get("error")
+        }
 
     res = analyze_generalized_ac_circuit(
         netlist,
@@ -899,19 +941,22 @@ def analyze_ac_circuit_endpoint(payload: Dict[str, Any]):
         "status": "success",
         "analysis_type": "AC_FREQUENCY_DOMAIN",
         "circuit_type": res.get("topology", {}).get("detected_topology", "AC_GENERAL_NETWORK"),
+        "circuitType": res.get("topology", {}).get("detected_topology", "AC_GENERAL_NETWORK"),
         "topology": res.get("topology"),
         "behavior": res.get("behavior"),
         "primary_candidate": res.get("primary_candidate"),
         "alternative_candidates": res.get("alternative_candidates"),
         "evidence": res.get("evidence"),
         "frequency_response": res.get("frequency_response"),
+        "frequencyResponse": res.get("frequency_response"),
         "shape_analysis": res.get("shape_analysis"),
         "cutoff": res.get("cutoff"),
         "resonance": res.get("resonance"),
         "benchmark_comparison": res.get("benchmark_comparison"),
         "sweep": res.get("sweep"),
         "source": "mna_simulation",
-        "is_measured": False
+        "is_measured": False,
+        "isMeasured": False
     }
 
 

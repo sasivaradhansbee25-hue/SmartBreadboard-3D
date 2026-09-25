@@ -190,6 +190,76 @@ export default function WaveformCanvas({ waveform, width = 480, height = 220, ti
       ctx.fillText(`${(maxF >= 1000 ? (maxF/1000).toFixed(0)+'kHz' : maxF.toFixed(0)+'Hz')}`, width - padding.right, height - padding.bottom + 16);
       ctx.fillText('Frequency (Log Scale)', width / 2, height - 6);
 
+    } else if (waveform.type === 'time_domain_sine') {
+      // Time-Domain Sinusoidal Waveform (Vin vs Vout)
+      const centerY = padding.top + graphH / 2;
+
+      // Draw Center 0V Reference Axis
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(padding.left, centerY);
+      ctx.lineTo(width - padding.right, centerY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Find max voltage for Y-axis scaling
+      let maxV = 1.0;
+      points.forEach(p => {
+        if (Math.abs(p.vin || 0) > maxV) maxV = Math.abs(p.vin);
+        if (Math.abs(p.vout || 0) > maxV) maxV = Math.abs(p.vout);
+      });
+      maxV = Math.max(maxV * 1.15, 1.0);
+
+      const getX = (tNorm) => padding.left + (tNorm) * graphW;
+      const getY = (v) => centerY - (v / maxV) * (graphH / 2);
+
+      // 1. Draw Vin trace (Cyan)
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.75)'; // Cyan
+      ctx.lineWidth = 2.0;
+      ctx.beginPath();
+      points.forEach((p, idx) => {
+        const x = getX(p.timeNormalized !== undefined ? p.timeNormalized : idx / (points.length - 1));
+        const y = getY(p.vin || 0);
+        if (idx === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      // 2. Draw Vout trace (Emerald if in-phase, Magenta if inverted)
+      const outColor = waveform.inPhase !== false ? '#10b981' : '#ec4899';
+      ctx.strokeStyle = outColor;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      points.forEach((p, idx) => {
+        const x = getX(p.timeNormalized !== undefined ? p.timeNormalized : idx / (points.length - 1));
+        const y = getY(p.vout || 0);
+        if (idx === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      // Labels & Legend
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '10px Inter, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`+${maxV.toFixed(1)}V`, padding.left - 6, padding.top + 10);
+      ctx.fillText('0.0V', padding.left - 6, centerY + 3);
+      ctx.fillText(`-${maxV.toFixed(1)}V`, padding.left - 6, height - padding.bottom);
+
+      // Legend
+      ctx.fillStyle = '#38bdf8';
+      ctx.textAlign = 'left';
+      ctx.fillText('— Vin (Input)', padding.left + 10, padding.top + 14);
+      ctx.fillStyle = outColor;
+      ctx.fillText(`— Vout (${waveform.inPhase !== false ? 'In-Phase' : '180° Inverted'})`, padding.left + 95, padding.top + 14);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.textAlign = 'center';
+      ctx.fillText('0', padding.left, height - padding.bottom + 16);
+      ctx.fillText('1 Cycle (2π)', width - padding.right, height - padding.bottom + 16);
+      ctx.fillText('Normalized Time / Phase Angle', width / 2, height - 6);
     } else {
       // Time Domain Transient Curve
       const maxTime = points[points.length - 1].timeMs || 5;
@@ -261,7 +331,6 @@ export default function WaveformCanvas({ waveform, width = 480, height = 220, ti
       ctx.fillText(`${maxTime.toFixed(1)} ms`, width - padding.right, height - padding.bottom + 16);
       ctx.fillText(waveform.xAxis || 'Time (ms)', width / 2, height - 6);
     }
-
   }, [waveform, width, height, activeMode]);
 
   const isFrequencyDomain = waveform?.type === 'frequency_response';
@@ -322,6 +391,30 @@ export default function WaveformCanvas({ waveform, width = 480, height = 220, ti
         {waveform?.f0Hz && (
           <span className="text-[11px] font-mono text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800">
             f₀ = {waveform.f0Hz < 1000 ? `${waveform.f0Hz} Hz` : `${(waveform.f0Hz/1000).toFixed(3)} kHz`}
+          </span>
+        )}
+        {waveform?.gain !== undefined && (
+          <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800">
+            Av = {typeof waveform.gain === 'number' ? `${waveform.gain >= 0 ? '+' : ''}${waveform.gain.toFixed(2)}` : waveform.gain}
+          </span>
+        )}
+        {waveform?.gainDb !== undefined && (
+          <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800">
+            {typeof waveform.gainDb === 'number' ? `${waveform.gainDb.toFixed(2)} dB` : waveform.gainDb}
+          </span>
+        )}
+        {waveform?.phaseDeg !== undefined && (
+          <span className="text-[11px] font-mono text-indigo-400 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800">
+            φ = {waveform.phaseDeg}°
+          </span>
+        )}
+        {waveform?.operatingState && (
+          <span className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded border ${
+            waveform.operatingState === 'LINEAR'
+              ? 'text-emerald-400 bg-emerald-950/80 border-emerald-800'
+              : 'text-rose-400 bg-rose-950/80 border-rose-800 animate-pulse'
+          }`}>
+            {waveform.operatingState}
           </span>
         )}
       </div>

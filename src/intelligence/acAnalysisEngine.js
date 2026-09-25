@@ -9,6 +9,7 @@
  */
 
 import { parseComponentValue } from '../utils/valueParser.js';
+import { resolveOpampTerminals, getIcDefinition } from './icRegistry.js';
 
 /**
  * Lightweight Complex Number Arithmetic Utilities
@@ -150,6 +151,28 @@ export function solveAcPoint(netlist, frequencyHz = 1000.0) {
   const rawComps = netlist?.components || [];
   const comps = rawComps.filter(c => !String(c.type || c.class).toLowerCase().includes('wire'));
 
+  // Collect opamps
+  const rawOpamps = [...(netlist?.ics || []), ...(netlist?.opamps || [])];
+  for (const rc of rawComps) {
+    const ctype = String(rc.type || rc.class || '').toLowerCase();
+    const part = String(rc.model || rc.part_number || rc.value || '').toUpperCase();
+    if (ctype.includes('opamp') || ctype.includes('op_amp') || ctype.includes('ic') || ['LM741', 'LM358', 'TL072', 'NE5532', 'OP07'].some(k => part.includes(k))) {
+      if (!rawOpamps.includes(rc)) rawOpamps.push(rc);
+    }
+  }
+
+  const validOpamps = [];
+  for (let idx = 0; idx < rawOpamps.length; idx++) {
+    const res = resolveOpampTerminals(rawOpamps[idx]);
+    if (res.success) {
+      validOpamps.push({
+        id: rawOpamps[idx].id || `U${idx + 1}`,
+        terminals: res.terminals,
+        icDefinition: res.icDefinition
+      });
+    }
+  }
+
   // Collect nodes
   const nodesSet = new Set();
   for (const c of rawComps) {
@@ -157,6 +180,19 @@ export function solveAcPoint(netlist, frequencyHz = 1000.0) {
     const n2 = c.node2 || c.node_b || c.hole2 || c.end_hole;
     if (n1) nodesSet.add(String(n1));
     if (n2) nodesSet.add(String(n2));
+  }
+  for (const op of validOpamps) {
+    const t = op.terminals;
+    ['in_pos', 'in_neg', 'output', 'v_plus', 'v_minus'].forEach(k => {
+      if (t[k]) nodesSet.add(String(t[k]));
+    });
+  }
+  const sources = netlist?.power_sources || netlist?.sources || (netlist?.power_supply ? [netlist.power_supply] : []);
+  for (const s of sources) {
+    const pn = s.positive_node || s.node_pos;
+    const nn = s.negative_node || s.node_neg;
+    if (pn) nodesSet.add(String(pn));
+    if (nn) nodesSet.add(String(nn));
   }
 
   const nodesList = Array.from(nodesSet);
@@ -168,7 +204,8 @@ export function solveAcPoint(netlist, frequencyHz = 1000.0) {
 
   const numNodes = nonGroundNodes.length;
   const numVsrc = 1; // Default 1.0V AC reference source
-  const size = numNodes + numVsrc;
+  const numOpamps = validOpamps.length;
+  const size = numNodes + numVsrc + numOpamps;
 
   if (size === 0) {
     return { success: false, frequencyHz, error: 'Empty circuit matrix' };
@@ -181,6 +218,8 @@ export function solveAcPoint(netlist, frequencyHz = 1000.0) {
   // Stamp passives
   for (const comp of rawComps) {
     const ctype = String(comp.type || comp.class || 'resistor').toLowerCase();
+    if (ctype.includes('opamp') || ctype.includes('op_amp') || ctype.includes('ic')) continue;
+
     const n1 = String(comp.node1 || comp.node_a || comp.hole1 || comp.start_hole || '');
     const n2 = String(comp.node2 || comp.node_b || comp.hole2 || comp.end_hole || '');
 
@@ -217,7 +256,11 @@ export function solveAcPoint(netlist, frequencyHz = 1000.0) {
   // Stamp Vsource across candidate input node and GND
   const vSrcIdx = numNodes;
   let posNodeIdx = numNodes > 0 ? 0 : -1;
-  if (numNodes > 0) {
+  if (validOpamps.length > 0 && validOpamps[0].terminals.in_pos) {
+    const inPosNode = validOpamps[0].terminals.in_pos;
+    if (nodeToIdx.has(inPosNode)) posNodeIdx = nodeToIdx.get(inPosNode);
+  }
+  if (posNodeIdx < 0 && numNodes > 0) {
     const namedInIdx = nonGroundNodes.findIndex(n => {
       const un = String(n).toUpperCase();
       return un.includes('VIN') || un.includes('VCC') || un.includes('PWR') || un === 'IN';
@@ -231,6 +274,43 @@ export function solveAcPoint(netlist, frequencyHz = 1000.0) {
     A[vSrcIdx][posNodeIdx] = A[vSrcIdx][posNodeIdx].add(new Complex(1, 0));
   }
   b[vSrcIdx] = new Complex(vMag, 0);
+
+  // Stamp Op-Amps
+  validOpamps.forEach((op, opIdx) => {
+    const colIdx = numNodes + numVsrc + opIdx;
+    const rowIdx = numNodes + numVsrc + opIdx;
+    const t = op.terminals;
+    const defn = op.icDefinition || {};
+    const specs = defn.electricalSpecs || {};
+
+    const inPos = t.in_pos;
+    const inNeg = t.in_neg;
+    const outNode = t.output;
+
+    const iPos = nodeToIdx.has(inPos) ? nodeToIdx.get(inPos) : -1;
+    const iNeg = nodeToIdx.has(inNeg) ? nodeToIdx.get(inNeg) : -1;
+    const iOut = nodeToIdx.has(outNode) ? nodeToIdx.get(outNode) : -1;
+
+    const aOl0 = Number(specs.openLoopGain) || 1.0e6;
+    const gbwp = Number(specs.gbwpHz) || 1.0e6;
+    const fPole = gbwp / Math.max(aOl0, 1.0);
+    // A_OL(jω) = A_ol_0 / (1 + j*(f / fPole))
+    const denom = new Complex(1.0, frequencyHz / Math.max(fPole, 1e-6));
+    const aOlJw = new Complex(aOl0, 0).div(denom);
+    const invGain = new Complex(1.0, 0).div(aOlJw);
+
+    // KCL at output
+    if (iOut >= 0) {
+      A[iOut][colIdx] = A[iOut][colIdx].add(new Complex(1, 0));
+    }
+
+    // Row equation: V+ - V- - (1 / A_OL) * Vout = 0
+    if (iPos >= 0) A[rowIdx][iPos] = A[rowIdx][iPos].add(new Complex(1, 0));
+    if (iNeg >= 0) A[rowIdx][iNeg] = A[rowIdx][iNeg].sub(new Complex(1, 0));
+    if (iOut >= 0) A[rowIdx][iOut] = A[rowIdx][iOut].sub(invGain);
+
+    b[rowIdx] = new Complex(0, 0);
+  });
 
   try {
     const sol = solveComplexMatrix(A, b);

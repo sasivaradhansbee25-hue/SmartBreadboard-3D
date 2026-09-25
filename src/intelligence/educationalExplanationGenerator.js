@@ -181,6 +181,50 @@ export function generateEducationalExplanation(classification, electricalBehavio
     ];
     sections.visualGuide = 'At center frequency f₀, inductive reactance XL exactly cancels capacitive reactance XC, creating a pure low-resistance bridge from input to output.';
     sections.whatIfAnalysis = 'Decreasing resistor R narrows the passband bandwidth BW and increases Quality factor Q, sharpening frequency selectivity.';
+  } else if (circuitType === 'OPAMP_NON_INVERTING') {
+    const rfVal = p?.rf?.value || 10000;
+    const rgVal = p?.rg?.value || 10000;
+    const gain = p?.gain?.value || (1 + rfVal / rgVal);
+    sections.keyComponents = [
+      { name: 'Operational Amplifier IC', role: `High open-loop gain difference amplifier (A_OL ≈ 100 dB) forcing virtual short between V+ and V-.` },
+      { name: 'Feedback Resistor (Rf)', role: `Connects output Vout back to inverting terminal V-, establishing closed-loop negative feedback.` },
+      { name: 'Gain-Setting Resistor (Rg)', role: `Forms a voltage divider with Rf from Vout to Ground to set non-inverting gain.` }
+    ];
+    sections.governingEquations = [
+      { equation: 'Av = 1 + (Rf / Rg)', substituted: `Av = 1 + (${rfVal}Ω / ${rgVal}Ω) = +${gain.toFixed(2)} (${(20 * Math.log10(gain)).toFixed(2)} dB)` },
+      { equation: 'Vout = Vin × Av', substituted: `Output signal is amplified in phase (0° phase shift) with Vin.` },
+      { equation: 'V_diff = V+ - V- ≈ 0V', substituted: `Virtual short principle: negative feedback forces inverting terminal to track Vin.` }
+    ];
+    sections.visualGuide = 'Signal enters the non-inverting (+) terminal directly. The emerald glow shows in-phase output amplification, while the cyan feedback loop returns an attenuated signal to the inverting (-) pin.';
+    sections.whatIfAnalysis = 'Increasing Rf increases closed-loop voltage gain. Decreasing Rg also increases gain. If Vin exceeds the supply rails / gain limit, the amplifier enters SATURATION.';
+  } else if (circuitType === 'OPAMP_INVERTING') {
+    const rfVal = p?.rf?.value || 10000;
+    const rinVal = p?.rin?.value || 10000;
+    const gainMag = p?.gainMagnitude?.value || (rfVal / rinVal);
+    sections.keyComponents = [
+      { name: 'Operational Amplifier IC', role: `Forces inverting node V- to virtual ground potential (0V) through high open-loop negative feedback.` },
+      { name: 'Input Resistor (Rin)', role: `Converts input voltage Vin into input signal current I_in = Vin / Rin.` },
+      { name: 'Feedback Resistor (Rf)', role: `Conducts entire input current to produce inverted output potential Vout = -I_in × Rf.` }
+    ];
+    sections.governingEquations = [
+      { equation: 'Av = - (Rf / Rin)', substituted: `Av = - (${rfVal}Ω / ${rinVal}Ω) = -${gainMag.toFixed(2)} (Phase = 180°)` },
+      { equation: 'Vout = -Vin × (Rf / Rin)', substituted: `Output signal is inverted by 180° relative to input Vin.` },
+      { equation: 'V- ≈ 0V (Virtual Ground)', substituted: `Non-inverting pin is grounded; feedback maintains inverting pin at 0V virtual ground.` }
+    ];
+    sections.visualGuide = 'Signal enters through Rin into the inverting (-) node. The inverted magenta waveform highlights the 180° phase inversion relative to Vin.';
+    sections.whatIfAnalysis = 'Increasing Rf increases inverting gain magnitude. Increasing Rin lowers input loading but decreases gain magnitude.';
+  } else if (circuitType === 'OPAMP_VOLTAGE_FOLLOWER') {
+    sections.keyComponents = [
+      { name: 'Operational Amplifier IC', role: `Provides unity-gain buffer action with near-infinite input impedance and near-zero output impedance.` },
+      { name: 'Direct Feedback Jumper', role: `Applies 100% negative feedback from Vout directly to the inverting (-) terminal.` }
+    ];
+    sections.governingEquations = [
+      { equation: 'Av ≈ 1.0 (0 dB)', substituted: `Av = Vout / Vin = 1.000, Phase = 0°` },
+      { equation: 'Vout = Vin', substituted: `Output voltage precisely mirrors input voltage without loading the signal source.` },
+      { equation: 'Zin ≈ ∞,  Zout ≈ 0', substituted: `Impedance buffer protects sensitive high-impedance sensors from low-impedance load distortion.` }
+    ];
+    sections.visualGuide = 'The output voltage tracks input voltage with 1:1 unity gain. The green feedback line illustrates 100% negative feedback stabilization.';
+    sections.whatIfAnalysis = 'The follower prevents signal voltage drop when driving low-resistance loads that would otherwise collapse a passive divider.';
   }
 
   return sections;

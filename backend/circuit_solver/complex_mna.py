@@ -78,7 +78,41 @@ def solve_ac_frequency_point(netlist: Dict[str, Any], frequency_hz: float) -> Di
                 "frequency": frequency_hz
             }
 
-    # Collect active nodes directly from components and sources
+    # Import IC registry for op-amp terminal resolution
+    try:
+        from .ic_registry import resolve_opamp_terminals, get_ic_definition
+    except ImportError:
+        resolve_opamp_terminals = None
+        get_ic_definition = None
+
+    # Collect op-amp components from netlist
+    raw_opamps = []
+    for item in netlist.get("ics", []) + netlist.get("opamps", []):
+        raw_opamps.append(item)
+    for rc in netlist.get("components", []):
+        ctype = str(rc.get("type", rc.get("class", ""))).lower()
+        part = str(rc.get("model", rc.get("part_number", rc.get("value", "")))).upper()
+        if "opamp" in ctype or "op_amp" in ctype or "ic" in ctype or any(k in part for k in ["LM741", "LM358", "TL072", "NE5532", "OP07"]):
+            if rc not in raw_opamps:
+                raw_opamps.append(rc)
+
+    # Resolve Op-Amp Terminals and Models
+    opamps = []
+    opamp_errors = []
+    if resolve_opamp_terminals:
+        for idx, ro in enumerate(raw_opamps):
+            res = resolve_opamp_terminals(ro)
+            if res.get("success"):
+                opamps.append({
+                    "id": ro.get("id", f"U{idx+1}"),
+                    "raw": ro,
+                    "terminals": res["terminals"],
+                    "ic_definition": res["ic_definition"]
+                })
+            else:
+                opamp_errors.append(res.get("error", "Invalid op-amp pin configuration"))
+
+    # Collect active nodes directly from components, sources, and op-amps
     active_nodes = set()
     for comp in components:
         if comp.node1: active_nodes.add(comp.node1)
@@ -88,6 +122,11 @@ def solve_ac_frequency_point(netlist: Dict[str, Any], frequency_hz: float) -> Di
         nn = s.get("negative_node") or s.get("node_neg")
         if pn: active_nodes.add(pn)
         if nn: active_nodes.add(nn)
+    for op in opamps:
+        t = op["terminals"]
+        for k in ["in_pos", "in_neg", "output", "v_plus", "v_minus"]:
+            if t.get(k):
+                active_nodes.add(t[k])
 
     # Find ground among active nodes
     ground_node_id = None
@@ -120,10 +159,16 @@ def solve_ac_frequency_point(netlist: Dict[str, Any], frequency_hz: float) -> Di
     # If no sources in netlist, supply a default 1V AC source between input node and GND
     if not voltage_sources and num_nodes > 0:
         pos_node = None
-        for n in node_list:
-            if "VIN" in str(n).upper() or "VCC" in str(n).upper() or "PWR" in str(n).upper() or "IN" in str(n).upper():
-                pos_node = n
+        # Prioritize op-amp in_pos or general VIN
+        for op in opamps:
+            if op["terminals"].get("in_pos") and op["terminals"]["in_pos"] != ground_node_id:
+                pos_node = op["terminals"]["in_pos"]
                 break
+        if not pos_node:
+            for n in node_list:
+                if "VIN" in str(n).upper() or "VCC" in str(n).upper() or "PWR" in str(n).upper() or "IN" in str(n).upper():
+                    pos_node = n
+                    break
         if not pos_node:
             pos_node = node_list[0]
 
@@ -137,7 +182,8 @@ def solve_ac_frequency_point(netlist: Dict[str, Any], frequency_hz: float) -> Di
         })
 
     num_vsrc = len(voltage_sources)
-    matrix_size = num_nodes + num_vsrc
+    num_opamps = len(opamps)
+    matrix_size = num_nodes + num_vsrc + num_opamps
 
     if matrix_size == 0:
         return {
@@ -155,6 +201,10 @@ def solve_ac_frequency_point(netlist: Dict[str, Any], frequency_hz: float) -> Di
         n1, n2 = comp.node1, comp.node2
         ctype = str(comp.type).lower()
         val = parse_numeric(comp.value, 1.0)
+
+        # Skip opamp component if it's in components list (handled via opamp stamping)
+        if "opamp" in ctype or "op_amp" in ctype or "ic" in ctype:
+            continue
 
         i1 = node_to_idx.get(n1, -1)
         i2 = node_to_idx.get(n2, -1)
@@ -212,6 +262,58 @@ def solve_ac_frequency_point(netlist: Dict[str, Any], frequency_hz: float) -> Di
             A[row_idx, i_neg] -= 1.0
 
         Z[row_idx, 0] = v_phasor
+
+    # 3. Stamp Op-Amps into MNA Matrix
+    # For each op-amp k:
+    # Column/Row idx = num_nodes + num_vsrc + k
+    # Output current I_out enters node output: A[idx_out, col] += 1.0
+    # Linear op-amp characteristic: V_+ - V_- - (1 / A_OL(jω)) * V_out = 0
+    # Finite input impedance Rin: stamp 1/Rin between in_pos and in_neg
+    for op_idx, op in enumerate(opamps):
+        col_idx = num_nodes + num_vsrc + op_idx
+        row_idx = num_nodes + num_vsrc + op_idx
+        t = op["terminals"]
+        defn = op.get("ic_definition", {})
+        specs = defn.get("electrical_specs", {})
+
+        in_pos = t.get("in_pos")
+        in_neg = t.get("in_neg")
+        out_node = t.get("output")
+
+        i_pos = node_to_idx.get(in_pos, -1)
+        i_neg = node_to_idx.get(in_neg, -1)
+        i_out = node_to_idx.get(out_node, -1)
+
+        # Calculate complex open-loop gain A_OL(jω)
+        a_ol_0 = float(specs.get("open_loop_gain", 1.0e6))
+        gbwp = float(specs.get("gbwp_hz", 1.0e6))
+        f_pole = gbwp / max(a_ol_0, 1.0)
+        a_ol_jw = complex(a_ol_0, 0.0) / complex(1.0, frequency_hz / max(f_pole, 1e-6))
+        inv_gain = 1.0 / a_ol_jw
+
+        # Stamp output current into KCL at out_node
+        if i_out >= 0:
+            A[i_out, col_idx] += 1.0
+
+        # Stamp transfer equation into row_idx
+        if i_pos >= 0:
+            A[row_idx, i_pos] += 1.0
+        if i_neg >= 0:
+            A[row_idx, i_neg] -= 1.0
+        if i_out >= 0:
+            A[row_idx, i_out] -= inv_gain
+
+        Z[row_idx, 0] = complex(0.0, 0.0)
+
+        # Finite input impedance Rin if present
+        r_in = float(specs.get("input_resistance_ohms", 0.0))
+        if r_in > 10.0:
+            y_in = complex(1.0 / r_in, 0.0)
+            if i_pos >= 0: A[i_pos, i_pos] += y_in
+            if i_neg >= 0: A[i_neg, i_neg] += y_in
+            if i_pos >= 0 and i_neg >= 0:
+                A[i_pos, i_neg] -= y_in
+                A[i_neg, i_pos] -= y_in
 
     # Solve Complex Linear System A * X = Z
     try:
@@ -310,12 +412,60 @@ def solve_ac_frequency_point(netlist: Dict[str, Any], frequency_hz: float) -> Di
                 "formatted": f"{abs(z_in_c):.2f} Ω ∠ {math.degrees(cmath.phase(z_in_c)):.1f}°"
             }
 
+    # Extract Op-Amp Operating Results
+    opamp_results = {}
+    for op_idx, op in enumerate(opamps):
+        col_idx = num_nodes + num_vsrc + op_idx
+        i_out_c = complex(X[col_idx, 0])
+        t = op["terminals"]
+        out_node = t.get("output")
+        in_pos = t.get("in_pos")
+        in_neg = t.get("in_neg")
+
+        v_out_c = complex_node_voltages.get(out_node, complex(0, 0))
+        v_pos_c = complex_node_voltages.get(in_pos, complex(0, 0))
+        v_neg_c = complex_node_voltages.get(in_neg, complex(0, 0))
+        v_diff_c = v_pos_c - v_neg_c
+
+        defn = op.get("ic_definition", {})
+        specs = defn.get("electrical_specs", {})
+        headroom = float(specs.get("output_headroom_v", 1.5))
+
+        v_out_mag = abs(v_out_c)
+        v_plus_node = t.get("v_plus")
+        v_minus_node = t.get("v_minus")
+
+        # Supply voltage limit checks
+        max_swing = 15.0 - headroom  # default ±15V assumption if not explicitly connected
+        if v_plus_node and v_plus_node in complex_node_voltages:
+            v_p = abs(complex_node_voltages[v_plus_node])
+            if v_p > 0.1:
+                max_swing = max(v_p - headroom, 0.5)
+
+        op_state = "LINEAR"
+        if v_out_mag > max_swing + 1e-4:
+            op_state = "SATURATED"
+
+        opamp_results[op["id"]] = {
+            "id": op["id"],
+            "model": defn.get("ic_id", "IDEAL_OPAMP"),
+            "display_name": defn.get("display_name", "Operational Amplifier"),
+            "operating_state": op_state,
+            "terminals": t,
+            "output_voltage_mag": round(float(v_out_mag), 4),
+            "output_voltage_phase_deg": round(float(math.degrees(cmath.phase(v_out_c))), 2),
+            "differential_input_v": round(float(abs(v_diff_c)), 6),
+            "output_current_mA": round(float(abs(i_out_c) * 1000.0), 4),
+            "is_saturated": (op_state == "SATURATED")
+        }
+
     return {
         "success": True,
         "frequency_hz": frequency_hz,
         "omega_rad_s": round(omega, 2),
         "node_voltages": node_voltage_results,
         "components": component_results,
+        "opamps": opamp_results,
         "input_impedance": z_in_val,
         "source_current": {
             "magnitude_mA": source_current_mag_mA,

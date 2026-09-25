@@ -7,7 +7,10 @@ Solves DC operating points and transient responses using linear algebra matrix e
 
 import numpy as np
 from typing import Dict, Any, List, Tuple, Optional
-from cv.value_parser import format_si_value
+try:
+    from backend.cv.value_parser import format_si_value
+except ImportError:
+    from cv.value_parser import format_si_value
 from .component_models import Component, Node, ComponentMeasurement, SolverResult
 from .netlist_parser import parse_circuit_netlist
 from .validation import validate_circuit_netlist

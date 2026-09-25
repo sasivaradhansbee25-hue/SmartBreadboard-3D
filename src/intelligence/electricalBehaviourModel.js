@@ -720,6 +720,163 @@ export function calculateCircuitBehaviour(classification, netlist, simulationRes
       };
     }
 
+    // -----------------------------------------------------------------------
+    // 14. NON-INVERTING OP-AMP AMPLIFIER (Phase 28)
+    // -----------------------------------------------------------------------
+    case 'OPAMP_NON_INVERTING': {
+      const rfComp = matchedComponents?.rf;
+      const rgComp = matchedComponents?.rg;
+      const rf = extractNumericValue(rfComp, 10000.0);
+      const rg = extractNumericValue(rgComp, 10000.0);
+
+      const gain = 1.0 + (rf / Math.max(rg, 1e-6));
+      const gainDb = 20.0 * Math.log10(Math.max(gain, 1e-6));
+      const vOutTheoretical = vSupply * gain;
+
+      // Operating state check
+      const maxSwing = 15.0 - 1.5; // ±13.5V typical swing
+      const isSaturated = Math.abs(vOutTheoretical) > maxSwing;
+      const operatingState = isSaturated ? 'SATURATED' : 'LINEAR';
+
+      // Generate time-domain sine waveforms (Vin vs Vout in phase)
+      const numPoints = 80;
+      const timePoints = [];
+      for (let i = 0; i < numPoints; i++) {
+        const t = (i / (numPoints - 1)) * 2 * Math.PI;
+        const vinInstant = vSupply * Math.sin(t);
+        const voutInstant = isSaturated
+          ? Math.max(Math.min(vOutTheoretical * Math.sin(t), maxSwing), -maxSwing)
+          : vOutTheoretical * Math.sin(t);
+        timePoints.push({
+          timeNormalized: Number((t / (2 * Math.PI)).toFixed(3)),
+          vin: Number(vinInstant.toFixed(3)),
+          vout: Number(voutInstant.toFixed(3))
+        });
+      }
+
+      return {
+        status: 'SOLVED_THEORETICAL',
+        circuitType,
+        sourceVoltage: { value: vSupply, unit: 'V', label: 'Input Signal (Vin)', source: 'nominal_supply', is_measured: false },
+        parameters: {
+          rf: { value: rf, unit: 'Ω', formatted: `${rf >= 1000 ? (rf / 1000).toFixed(2) + ' kΩ' : rf.toFixed(1) + ' Ω'}`, label: 'Feedback Resistor (Rf)', source: 'component_value', is_measured: false },
+          rg: { value: rg, unit: 'Ω', formatted: `${rg >= 1000 ? (rg / 1000).toFixed(2) + ' kΩ' : rg.toFixed(1) + ' Ω'}`, label: 'Gain Resistor (Rg)', source: 'component_value', is_measured: false },
+          gain: { value: gain, unit: '', formatted: `+${gain.toFixed(2)}`, label: 'Voltage Gain (Av = 1 + Rf/Rg)', source: 'theoretical_model', is_measured: false },
+          gainDb: { value: gainDb, unit: 'dB', formatted: `${gainDb.toFixed(2)} dB`, label: 'Voltage Gain (dB)', source: 'theoretical_model', is_measured: false },
+          vOut: { value: vOutTheoretical, unit: 'V', formatted: `${vOutTheoretical.toFixed(2)} V`, label: 'Output Voltage (Vout)', source: 'theoretical_model', is_measured: false },
+          phase: { value: 0.0, unit: '°', formatted: '0.0°', label: 'Phase Angle (In-Phase)', source: 'theoretical_model', is_measured: false },
+          operatingState
+        },
+        waveforms: [
+          {
+            name: 'Input vs Non-Inverting Output Waveform',
+            type: 'time_domain_sine',
+            points: timePoints,
+            inPhase: true
+          }
+        ],
+        governingEquation: 'Av = 1 + (Rf / Rg),  Vout = Vin × (1 + Rf / Rg),  Phase = 0°'
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // 15. INVERTING OP-AMP AMPLIFIER (Phase 28)
+    // -----------------------------------------------------------------------
+    case 'OPAMP_INVERTING': {
+      const rfComp = matchedComponents?.rf;
+      const rinComp = matchedComponents?.rin;
+      const rf = extractNumericValue(rfComp, 10000.0);
+      const rin = extractNumericValue(rinComp, 10000.0);
+
+      const gainMag = rf / Math.max(rin, 1e-6);
+      const gainDb = 20.0 * Math.log10(Math.max(gainMag, 1e-6));
+      const vOutTheoretical = -vSupply * gainMag;
+
+      const maxSwing = 15.0 - 1.5;
+      const isSaturated = Math.abs(vOutTheoretical) > maxSwing;
+      const operatingState = isSaturated ? 'SATURATED' : 'LINEAR';
+
+      const numPoints = 80;
+      const timePoints = [];
+      for (let i = 0; i < numPoints; i++) {
+        const t = (i / (numPoints - 1)) * 2 * Math.PI;
+        const vinInstant = vSupply * Math.sin(t);
+        const voutInstant = isSaturated
+          ? Math.max(Math.min(vOutTheoretical * Math.sin(t), maxSwing), -maxSwing)
+          : vOutTheoretical * Math.sin(t);
+        timePoints.push({
+          timeNormalized: Number((t / (2 * Math.PI)).toFixed(3)),
+          vin: Number(vinInstant.toFixed(3)),
+          vout: Number(voutInstant.toFixed(3))
+        });
+      }
+
+      return {
+        status: 'SOLVED_THEORETICAL',
+        circuitType,
+        sourceVoltage: { value: vSupply, unit: 'V', label: 'Input Signal (Vin)', source: 'nominal_supply', is_measured: false },
+        parameters: {
+          rf: { value: rf, unit: 'Ω', formatted: `${rf >= 1000 ? (rf / 1000).toFixed(2) + ' kΩ' : rf.toFixed(1) + ' Ω'}`, label: 'Feedback Resistor (Rf)', source: 'component_value', is_measured: false },
+          rin: { value: rin, unit: 'Ω', formatted: `${rin >= 1000 ? (rin / 1000).toFixed(2) + ' kΩ' : rin.toFixed(1) + ' Ω'}`, label: 'Input Resistor (Rin)', source: 'component_value', is_measured: false },
+          gainMagnitude: { value: gainMag, unit: '', formatted: `${gainMag.toFixed(2)}`, label: '|Av| = Rf / Rin', source: 'theoretical_model', is_measured: false },
+          gain: { value: -gainMag, unit: '', formatted: `-${gainMag.toFixed(2)}`, label: 'Voltage Gain (Av = -Rf/Rin)', source: 'theoretical_model', is_measured: false },
+          gainDb: { value: gainDb, unit: 'dB', formatted: `${gainDb.toFixed(2)} dB`, label: 'Voltage Gain (dB)', source: 'theoretical_model', is_measured: false },
+          vOut: { value: vOutTheoretical, unit: 'V', formatted: `${vOutTheoretical.toFixed(2)} V`, label: 'Output Voltage (Vout)', source: 'theoretical_model', is_measured: false },
+          phase: { value: 180.0, unit: '°', formatted: '180.0°', label: 'Phase Angle (Inverted)', source: 'theoretical_model', is_measured: false },
+          operatingState
+        },
+        waveforms: [
+          {
+            name: 'Input vs Inverted Output Waveform (180° Phase Shift)',
+            type: 'time_domain_sine',
+            points: timePoints,
+            inPhase: false
+          }
+        ],
+        governingEquation: 'Av = - (Rf / Rin),  Vout = -Vin × (Rf / Rin),  Phase = 180°'
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // 16. VOLTAGE FOLLOWER / BUFFER (Phase 28)
+    // -----------------------------------------------------------------------
+    case 'OPAMP_VOLTAGE_FOLLOWER': {
+      const vOutTheoretical = vSupply;
+      const numPoints = 80;
+      const timePoints = [];
+      for (let i = 0; i < numPoints; i++) {
+        const t = (i / (numPoints - 1)) * 2 * Math.PI;
+        const vinInstant = vSupply * Math.sin(t);
+        timePoints.push({
+          timeNormalized: Number((t / (2 * Math.PI)).toFixed(3)),
+          vin: Number(vinInstant.toFixed(3)),
+          vout: Number(vinInstant.toFixed(3))
+        });
+      }
+
+      return {
+        status: 'SOLVED_THEORETICAL',
+        circuitType,
+        sourceVoltage: { value: vSupply, unit: 'V', label: 'Input Signal (Vin)', source: 'nominal_supply', is_measured: false },
+        parameters: {
+          gain: { value: 1.0, unit: '', formatted: '1.000', label: 'Voltage Gain (Av ≈ 1.0)', source: 'theoretical_model', is_measured: false },
+          gainDb: { value: 0.0, unit: 'dB', formatted: '0.00 dB', label: 'Voltage Gain (dB)', source: 'theoretical_model', is_measured: false },
+          vOut: { value: vOutTheoretical, unit: 'V', formatted: `${vOutTheoretical.toFixed(2)} V`, label: 'Output Voltage (Vout)', source: 'theoretical_model', is_measured: false },
+          phase: { value: 0.0, unit: '°', formatted: '0.0°', label: 'Phase Angle (In-Phase)', source: 'theoretical_model', is_measured: false },
+          operatingState: 'LINEAR'
+        },
+        waveforms: [
+          {
+            name: 'Voltage Follower Unity Tracking Waveform',
+            type: 'time_domain_sine',
+            points: timePoints,
+            inPhase: true
+          }
+        ],
+        governingEquation: 'Av ≈ 1.0,  Vout = Vin,  Zin ≈ ∞,  Zout ≈ 0'
+      };
+    }
+
     default:
       return {
         status: 'UNAVAILABLE',

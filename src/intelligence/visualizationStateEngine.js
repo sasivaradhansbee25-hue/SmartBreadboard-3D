@@ -621,6 +621,127 @@ export function generateVisualizationState(classification, electricalBehaviour, 
     };
   }
 
+  // =========================================================================
+  // 11. ACTIVE OP-AMP AMPLIFIERS VISUALIZATION (Phase 28)
+  // =========================================================================
+  if (circuitType === 'OPAMP_NON_INVERTING' || circuitType === 'OPAMP_INVERTING' || circuitType === 'OPAMP_VOLTAGE_FOLLOWER') {
+    const opamp = matchedComponents?.opamp;
+    const rf = matchedComponents?.rf;
+    const rg = matchedComponents?.rg;
+    const rin = matchedComponents?.rin;
+    const p = electricalBehaviour?.parameters;
+
+    const isNonInv = circuitType === 'OPAMP_NON_INVERTING';
+    const isInv = circuitType === 'OPAMP_INVERTING';
+    const isFollower = circuitType === 'OPAMP_VOLTAGE_FOLLOWER';
+
+    if (opamp) {
+      compHighlights[opamp.id || opamp.designator || 'U1'] = {
+        role: 'OPAMP_IC',
+        roleLabel: isNonInv ? 'Non-Inv Op-Amp' : (isInv ? 'Inverting Op-Amp' : 'Voltage Buffer'),
+        color: '#10b981', // Emerald
+        haloIntensity: 1.2,
+        pulseSpeed: 1.2,
+        tooltip: `${parameters?.ic || 'Op-Amp'} Active Differential Core`
+      };
+    }
+
+    if (rf) {
+      compHighlights[rf.id || rf.designator] = {
+        role: 'FEEDBACK_RESISTOR',
+        roleLabel: 'Feedback Rf',
+        color: '#38bdf8', // Cyan
+        haloIntensity: 1.0,
+        pulseSpeed: 1.5,
+        tooltip: `Rf: Closes negative feedback loop to inverting (-) pin`
+      };
+    }
+
+    if (rg) {
+      compHighlights[rg.id || rg.designator] = {
+        role: 'GAIN_RESISTOR',
+        roleLabel: 'Gain Rg',
+        color: '#f59e0b', // Amber
+        haloIntensity: 0.9,
+        pulseSpeed: 1.0,
+        tooltip: `Rg: Sets non-inverting gain divisor to Ground`
+      };
+    }
+
+    if (rin) {
+      compHighlights[rin.id || rin.designator] = {
+        role: 'INPUT_RESISTOR',
+        roleLabel: 'Input Rin',
+        color: '#ec4899', // Pink
+        haloIntensity: 0.9,
+        pulseSpeed: 1.0,
+        tooltip: `Rin: Converts Vin into inverting input current`
+      };
+    }
+
+    if (parameters?.node_out) {
+      nodeVoltages.push({
+        nodeId: parameters.node_out,
+        label: 'Vout',
+        voltage: p?.vOut?.value || 0,
+        formatted: p?.vOut?.formatted || `${(parameters?.theoretical_gain || 1.0).toFixed(2)} V`,
+        color: '#10b981',
+        badge: 'AMPLIFIED_OUTPUT'
+      });
+    }
+
+    const opState = p?.operatingState || 'LINEAR';
+
+    return {
+      status: 'VERIFIED',
+      circuitType,
+      visualizationType: isNonInv ? VISUALIZATION_TYPES.OPAMP_AMPLIFIER : (isInv ? VISUALIZATION_TYPES.OPAMP_INVERTING : VISUALIZATION_TYPES.OPAMP_FOLLOWER),
+      isEducationalAnimationActive: opState === 'LINEAR',
+      componentHighlights: compHighlights,
+      overlays: {
+        signalFlow: true,
+        feedbackPath: true,
+        inputOutputWaveform: true,
+        gain: true,
+        phase: true,
+        operatingState: true
+      },
+      currentFlow: { enabled: true, branches: [] },
+      signalFlow: {
+        type: 'ACTIVE_AMPLIFIER',
+        active: true,
+        inPhase: isNonInv || isFollower,
+        isInverted: isInv,
+        gain: parameters?.theoretical_gain || 1.0
+      },
+      activeState: {
+        mode: circuitType,
+        icModel: parameters?.ic || 'IDEAL_OPAMP',
+        gain: parameters?.theoretical_gain || 1.0,
+        phaseDeg: isInv ? 180.0 : 0.0,
+        operatingState: opState,
+        feedbackPathActive: true
+      },
+      nodeVoltages,
+      waveforms: electricalBehaviour?.waveforms || [],
+      transientState: null,
+      educationalAnnotations: [
+        {
+          id: 'anno-opamp-1',
+          target: parameters?.node_out || 'Vout',
+          title: isNonInv ? 'Non-Inverting Amplified Output' : (isInv ? 'Inverting Phase-Reversed Output' : 'Buffered Unity Output'),
+          text: `Gain Av = ${isInv ? '-' : '+'}${Math.abs(parameters?.theoretical_gain || 1.0).toFixed(2)} (Phase = ${isInv ? '180°' : '0°'})`
+        }
+      ],
+      warningBanner: opState === 'SATURATED' ? {
+        type: 'WARNING',
+        title: 'Amplifier Saturated',
+        message: 'Output signal exceeds supply rails and is clipping.',
+        missingRequirements: []
+      } : null
+    };
+  }
+
   // Fallback generic state
   return {
     status: 'VERIFIED',

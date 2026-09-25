@@ -12,6 +12,7 @@
  */
 
 import { circuitRegistry, VERIFICATION_STATES, VISUALIZATION_TYPES } from './circuitKnowledgeRegistry.js';
+import { resolveOpampTerminals, getIcDefinition } from './icRegistry.js';
 
 /**
  * Normalizes component type string.
@@ -25,7 +26,7 @@ function normalizeType(rawType) {
   if (t.includes('inductor')) return 'inductor';
   if (t.includes('diode')) return 'diode';
   if (t.includes('transistor') || t.includes('bjt') || t.includes('mosfet')) return 'transistor';
-  if (t.includes('ic') || t.includes('opamp') || t.includes('dip')) return 'ic';
+  if (t.includes('opamp') || t.includes('op_amp') || t.includes('ic') || t.includes('dip') || t.includes('lm741') || t.includes('lm358') || t.includes('tl072') || t.includes('ne5532') || t.includes('op07')) return 'opamp';
   if (t.includes('wire') || t.includes('jumper')) return 'wire';
   return t;
 }
@@ -119,6 +120,7 @@ export function classifyCircuitTopology(netlist, simulationResult = null) {
     diode: 0,
     inductor: 0,
     transistor: 0,
+    opamp: 0,
     ic: 0,
     other: 0
   };
@@ -130,6 +132,7 @@ export function classifyCircuitTopology(netlist, simulationResult = null) {
     diode: [],
     inductor: [],
     transistor: [],
+    opamp: [],
     ic: [],
     other: []
   };
@@ -182,6 +185,211 @@ export function classifyCircuitTopology(netlist, simulationResult = null) {
   // =========================================================================
   // TOPOLOGY RULE EVALUATORS
   // =========================================================================
+
+  // 0. Active Operational Amplifier Circuits (Evaluated first when IC/OpAmp present)
+  const rawOpamps = [...(netlist.ics || []), ...(netlist.opamps || []), ...(compsByType.opamp || [])];
+  if (rawOpamps.length > 0) {
+    const rawOp = rawOpamps[0];
+    const termRes = resolveOpampTerminals(rawOp);
+    const ctype = String(rawOp.type || rawOp.class || '').toLowerCase();
+    const isExplicitOpamp = ctype.includes('opamp') || ctype.includes('op_amp') || Boolean(rawOp.model && getIcDefinition(rawOp.model));
+
+    if (!termRes.success && isExplicitOpamp) {
+      return {
+        circuitType: 'UNKNOWN_ACTIVE_IC',
+        displayName: 'Unverified IC Circuit',
+        category: 'amplifier',
+        verificationState: VERIFICATION_STATES.NOT_VERIFIED,
+        confidence: 0.2,
+        topologyStatus: termRes.status || 'INVALID_PIN_MAPPING',
+        electricalModelStatus: 'UNAVAILABLE',
+        parameters: { error: termRes.error, missing_pins: termRes.missingPins },
+        visualizationType: VISUALIZATION_TYPES.GENERIC_DC_FLOW,
+        warnings: [termRes.error || 'IC pin configuration is unverified or invalid.'],
+        missingRequirements: ['Verify IC part model and connect non-inverting (+), inverting (-), and output terminals properly.']
+      };
+    }
+
+    if (termRes.success) {
+      const icDef = termRes.icDefinition;
+      const terms = termRes.terminals;
+      const inPos = terms.in_pos;
+      const inNeg = terms.in_neg;
+      const outNode = terms.output;
+
+      const resistors = compsByType.resistor || [];
+      const wires = compsByType.wire || wireComponents || [];
+      const capacitors = compsByType.capacitor || [];
+
+      // Helper: find resistor between two nodes
+      const findResistorBetween = (nA, nB) => {
+        for (const r of resistors) {
+          const cn = getComponentNodes(r);
+          const setN = new Set([cn.node1, cn.node2].filter(Boolean));
+          if (setN.has(nA) && setN.has(nB)) return r;
+        }
+        return null;
+      };
+
+      // Helper: check direct short or wire between two nodes
+      const hasWireOrShort = (nA, nB) => {
+        if (nA === nB) return true;
+        for (const w of wires) {
+          const wn = getComponentNodes(w);
+          const setW = new Set([wn.node1, wn.node2].filter(Boolean));
+          if (setW.has(nA) && setW.has(nB)) return true;
+        }
+        return false;
+      };
+
+      // Architecture Placeholders: Active RC filters / Sallen-Key
+      if (capacitors.length > 0) {
+        return {
+          circuitType: 'ACTIVE_LOW_PASS',
+          displayName: 'Active Filter / Sallen-Key (Architecture Placeholder)',
+          category: 'amplifier',
+          verificationState: VERIFICATION_STATES.UNSUPPORTED,
+          confidence: 0.5,
+          topologyStatus: 'UNSUPPORTED_ACTIVE_FILTER',
+          electricalModelStatus: 'UNAVAILABLE',
+          parameters: { ic: icDef.icId, capacitors_count: capacitors.length },
+          visualizationType: VISUALIZATION_TYPES.ACTIVE_FILTER,
+          warnings: ['Active RC filter / Sallen-Key detected, but active frequency-shaping model is an architectural placeholder (unsupported in this release).'],
+          missingRequirements: ['Supported active topologies in Phase 28 are Non-Inverting, Inverting, and Voltage Follower.']
+        };
+      }
+
+      // 1. Voltage Follower
+      const isFollowerFeedback = hasWireOrShort(outNode, inNeg);
+      if (isFollowerFeedback && inPos) {
+        return {
+          circuitType: 'OPAMP_VOLTAGE_FOLLOWER',
+          displayName: 'Op-Amp Voltage Follower (Buffer)',
+          category: 'amplifier',
+          verificationState: VERIFICATION_STATES.VERIFIED,
+          confidence: 0.98,
+          topologyStatus: 'VALID_OPAMP_VOLTAGE_FOLLOWER',
+          electricalModelStatus: 'AVAILABLE',
+          parameters: {
+            ic: icDef.icId,
+            node_in: inPos,
+            node_out: outNode,
+            node_inv: inNeg,
+            theoretical_gain: 1.0,
+            theoretical_phase_deg: 0.0
+          },
+          matchedComponents: { opamp: rawOp },
+          visualizationType: VISUALIZATION_TYPES.OPAMP_FOLLOWER,
+          warnings: [],
+          missingRequirements: []
+        };
+      }
+
+      // 2. Non-Inverting Op-Amp: Rf between Out and In(-), Rg between In(-) and Ground
+      const rfNonInv = findResistorBetween(outNode, inNeg);
+      let rgNonInv = null;
+      for (const r of resistors) {
+        if (r === rfNonInv) continue;
+        const cn = getComponentNodes(r);
+        const setN = new Set([cn.node1, cn.node2].filter(Boolean));
+        if (setN.has(inNeg) && [...setN].some(n => isGroundNode(n) || n.includes('GND') || n.includes('BOT'))) {
+          rgNonInv = r;
+          break;
+        }
+      }
+
+      if (rfNonInv && rgNonInv && inPos) {
+        const rfVal = rfNonInv.value || 10000;
+        const rgVal = rgNonInv.value || 10000;
+        const theoGain = 1.0 + (rfVal / Math.max(rgVal, 1e-6));
+        return {
+          circuitType: 'OPAMP_NON_INVERTING',
+          displayName: 'Non-Inverting Op-Amp Amplifier',
+          category: 'amplifier',
+          verificationState: VERIFICATION_STATES.VERIFIED,
+          confidence: 0.98,
+          topologyStatus: 'VALID_OPAMP_NON_INVERTING',
+          electricalModelStatus: 'AVAILABLE',
+          parameters: {
+            ic: icDef.icId,
+            rf: rfNonInv.id || rfNonInv.designator,
+            rg: rgNonInv.id || rgNonInv.designator,
+            rf_value: rfVal,
+            rg_value: rgVal,
+            theoretical_gain: theoGain,
+            node_in: inPos,
+            node_out: outNode,
+            node_inv: inNeg
+          },
+          matchedComponents: { opamp: rawOp, rf: rfNonInv, rg: rgNonInv },
+          visualizationType: VISUALIZATION_TYPES.OPAMP_AMPLIFIER,
+          warnings: [],
+          missingRequirements: []
+        };
+      }
+
+      // 3. Inverting Op-Amp: Rf between Out and In(-), Rin between Input and In(-), In(+) grounded
+      const rfInv = findResistorBetween(outNode, inNeg);
+      let rinInv = null;
+      for (const r of resistors) {
+        if (r === rfInv) continue;
+        const cn = getComponentNodes(r);
+        const setN = new Set([cn.node1, cn.node2].filter(Boolean));
+        if (setN.has(inNeg)) {
+          rinInv = r;
+          break;
+        }
+      }
+      const isPosGnd = isGroundNode(inPos) || inPos?.includes('GND') || hasWireOrShort(inPos, '0') || hasWireOrShort(inPos, 'NODE_GND');
+
+      if (rfInv && rinInv && isPosGnd) {
+        const rfVal = rfInv.value || 10000;
+        const rinVal = rinInv.value || 10000;
+        const theoGain = -(rfVal / Math.max(rinVal, 1e-6));
+        return {
+          circuitType: 'OPAMP_INVERTING',
+          displayName: 'Inverting Op-Amp Amplifier',
+          category: 'amplifier',
+          verificationState: VERIFICATION_STATES.VERIFIED,
+          confidence: 0.98,
+          topologyStatus: 'VALID_OPAMP_INVERTING',
+          electricalModelStatus: 'AVAILABLE',
+          parameters: {
+            ic: icDef.icId,
+            rf: rfInv.id || rfInv.designator,
+            rin: rinInv.id || rinInv.designator,
+            rf_value: rfVal,
+            rin_value: rinVal,
+            theoretical_gain: theoGain,
+            node_out: outNode,
+            node_inv: inNeg,
+            node_pos: inPos
+          },
+          matchedComponents: { opamp: rawOp, rf: rfInv, rin: rinInv },
+          visualizationType: VISUALIZATION_TYPES.OPAMP_INVERTING,
+          warnings: [],
+          missingRequirements: []
+        };
+      }
+
+      // Opamp present but feedback/connections are invalid
+      if (isExplicitOpamp) {
+        return {
+          circuitType: 'UNKNOWN_OPAMP_TOPOLOGY',
+          displayName: 'Unrecognized Op-Amp Circuit',
+          category: 'amplifier',
+          verificationState: VERIFICATION_STATES.UNSUPPORTED,
+          confidence: 0.4,
+          topologyStatus: 'UNSUPPORTED_FEEDBACK_TOPOLOGY',
+          electricalModelStatus: 'AVAILABLE',
+          parameters: { ic: icDef.icId },
+          visualizationType: VISUALIZATION_TYPES.GENERIC_DC_FLOW,
+          warnings: ['Operational amplifier detected, but resistor feedback loop does not form a supported closed-loop amplifier.'],
+          missingRequirements: ['Connect feedback resistor between Output and In(-) and configure Non-Inverting, Inverting, or Follower topology.']
+        };
+      }
+    }
+  }
 
   // 1. Voltage Divider Rule
   if (typeCounts.resistor === 2 && typeCounts.capacitor === 0 && typeCounts.led === 0 && typeCounts.diode === 0 && typeCounts.inductor === 0) {

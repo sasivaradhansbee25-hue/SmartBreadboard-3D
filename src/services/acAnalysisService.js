@@ -1,12 +1,84 @@
 /**
- * SmartBreadboard 3D — AC Analysis Service (Phase 26 & 27)
+ * SmartBreadboard 3D — AC & Active Circuit Analysis Service (Phase 26, 27 & 28)
  *
- * Consumes backend Complex MNA endpoints with seamless client-side offline fallback.
+ * Consumes backend Complex MNA and Active Circuit Intelligence endpoints
+ * with seamless client-side offline fallback.
  * Scientific Integrity: is_measured is strictly false, source is 'mna_simulation'.
+ * Supports canonical active circuit statuses:
+ * - VERIFIED
+ * - UNKNOWN
+ * - UNSUPPORTED
+ * - INVALID_OPERATING_STATE
+ * - SATURATED
+ * - SOLVER_INVALID
  */
 
 import { apiRequest } from './api.js';
 import { analyzeClientGeneralizedAcCircuit } from '../intelligence/acAnalysisEngine.js';
+
+export const ACTIVE_CIRCUIT_STATUSES = {
+  VERIFIED: 'VERIFIED',
+  UNKNOWN: 'UNKNOWN',
+  UNSUPPORTED: 'UNSUPPORTED',
+  INVALID_OPERATING_STATE: 'INVALID_OPERATING_STATE',
+  SATURATED: 'SATURATED',
+  SOLVER_INVALID: 'SOLVER_INVALID'
+};
+
+/**
+ * Normalizes active circuit response per Section 23 specification.
+ */
+export function normalizeActiveCircuitResult(res) {
+  if (!res) {
+    return {
+      status: ACTIVE_CIRCUIT_STATUSES.UNKNOWN,
+      circuitType: 'UNKNOWN',
+      error: 'Empty active circuit response',
+      source: 'mna_simulation',
+      is_measured: false,
+      isMeasured: false
+    };
+  }
+
+  const rawStatus = String(res.status || 'UNKNOWN').toUpperCase();
+  const operatingState = String(res.operatingState || res.operating_state || 'UNKNOWN').toUpperCase();
+
+  // Normalize Status
+  let normalizedStatus = ACTIVE_CIRCUIT_STATUSES.UNKNOWN;
+  if (rawStatus === 'VERIFIED' || rawStatus === 'SUCCESS') {
+    normalizedStatus = (operatingState === 'SATURATED')
+      ? ACTIVE_CIRCUIT_STATUSES.SATURATED
+      : (operatingState === 'INVALID_OPERATING_STATE' ? ACTIVE_CIRCUIT_STATUSES.INVALID_OPERATING_STATE : ACTIVE_CIRCUIT_STATUSES.VERIFIED);
+  } else if (Object.values(ACTIVE_CIRCUIT_STATUSES).includes(rawStatus)) {
+    normalizedStatus = rawStatus;
+  } else if (Object.values(ACTIVE_CIRCUIT_STATUSES).includes(operatingState)) {
+    normalizedStatus = operatingState;
+  }
+
+  return {
+    status: normalizedStatus,
+    circuitType: res.circuitType || res.circuit_type || 'UNKNOWN',
+    displayName: res.displayName || res.display_name || 'Active Operational Amplifier Circuit',
+    icModel: res.icModel || res.ic_model || null,
+    pinMapping: res.pinMapping || res.pin_mapping || null,
+    operatingState: operatingState,
+    isSaturated: operatingState === 'SATURATED',
+    transferFunction: res.transferFunction || res.transfer_function || null,
+    frequencyResponse: res.frequencyResponse || res.frequency_response || [],
+    gain: res.gain || { magnitude: 0, db: 0 },
+    phase: res.phase || { degrees: 0 },
+    voltages: res.voltages || null,
+    feedbackNetwork: res.feedbackNetwork || res.feedback_network || null,
+    educationalExplanation: res.educationalExplanation || res.educational_explanation || null,
+    visualizationState: res.visualizationState || res.visualization_state || null,
+    limitations: res.limitations || null,
+    evidence: res.evidence || {},
+    error: res.error || null,
+    source: 'mna_simulation',
+    is_measured: false,
+    isMeasured: false
+  };
+}
 
 export async function requestAcAnalysis(netlist, analysisOptions = {}) {
   const payload = {
@@ -26,15 +98,31 @@ export async function requestAcAnalysis(netlist, analysisOptions = {}) {
 
   try {
     const res = await apiRequest('/ac/analyze', 'POST', payload);
-    if (res && res.status === 'success') {
-      return {
-        ...res,
-        source: 'mna_simulation',
-        is_measured: false
-      };
+    if (res) {
+      if (res.analysis_type === 'ACTIVE_OPAMP_CIRCUIT' || (res.circuit_type && res.circuit_type.startsWith('OPAMP_'))) {
+        return normalizeActiveCircuitResult(res);
+      }
+
+      if (res.status === 'success') {
+        return {
+          ...res,
+          circuitType: res.circuitType || res.circuit_type,
+          icModel: res.icModel || res.ic_model,
+          pinMapping: res.pinMapping || res.pin_mapping,
+          operatingState: res.operatingState || res.operating_state,
+          transferFunction: res.transferFunction || res.transfer_function,
+          frequencyResponse: res.frequencyResponse || res.frequency_response,
+          source: 'mna_simulation',
+          is_measured: false,
+          isMeasured: false
+        };
+      }
     }
   } catch (err) {
-    // Graceful offline fallback using deterministic client-side AC engine
+    // If backend returns an explicit error payload, do not hide solver errors
+    if (err?.status && Object.values(ACTIVE_CIRCUIT_STATUSES).includes(err.status)) {
+      return normalizeActiveCircuitResult(err);
+    }
   }
 
   // Client-Side Deterministic Complex MNA Fallback
@@ -52,14 +140,23 @@ export async function requestAcAnalysis(netlist, analysisOptions = {}) {
     status: 'success',
     analysis_type: 'AC_FREQUENCY_DOMAIN',
     circuit_type: clientRes.behavior || 'AC_GENERAL_NETWORK',
+    circuitType: clientRes.behavior || 'AC_GENERAL_NETWORK',
     behavior: clientRes.behavior,
     primary_candidate: clientRes.primaryCandidate,
     frequency_response: clientRes.frequencyResponse,
+    frequencyResponse: clientRes.frequencyResponse,
     shape_analysis: clientRes.shapeAnalysis,
     cutoff: clientRes.cutoff,
     resonance: clientRes.resonance,
     sweep: clientRes.sweep,
     source: 'mna_simulation',
-    is_measured: false
+    is_measured: false,
+    isMeasured: false
   };
 }
+
+export default {
+  ACTIVE_CIRCUIT_STATUSES,
+  normalizeActiveCircuitResult,
+  requestAcAnalysis
+};

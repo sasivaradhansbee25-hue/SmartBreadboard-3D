@@ -4,7 +4,10 @@ Parses raw frontend/detection netlist inputs into normalized Component, Node, an
 """
 
 from typing import Dict, Any, List, Tuple
-from cv.value_parser import parse_component_value, format_si_value
+try:
+    from backend.cv.value_parser import parse_component_value, format_si_value
+except ImportError:
+    from cv.value_parser import parse_component_value, format_si_value
 from .component_models import Component, Node
 
 def parse_circuit_netlist(netlist: Dict[str, Any]) -> Tuple[List[Component], List[Dict[str, Any]], Dict[str, Node]]:

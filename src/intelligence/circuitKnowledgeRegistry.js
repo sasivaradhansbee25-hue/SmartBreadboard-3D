@@ -44,7 +44,11 @@ export const VISUALIZATION_TYPES = {
   AC_HIGH_PASS: 'AC_HIGH_PASS',
   AC_BAND_PASS: 'AC_BAND_PASS',
   AC_BAND_STOP: 'AC_BAND_STOP',
-  AC_FREQUENCY_RESPONSE: 'AC_FREQUENCY_RESPONSE'
+  AC_FREQUENCY_RESPONSE: 'AC_FREQUENCY_RESPONSE',
+  OPAMP_AMPLIFIER: 'OPAMP_AMPLIFIER',
+  OPAMP_INVERTING: 'OPAMP_INVERTING',
+  OPAMP_FOLLOWER: 'OPAMP_FOLLOWER',
+  ACTIVE_FILTER: 'ACTIVE_FILTER'
 };
 
 /**
@@ -647,6 +651,153 @@ const BUILT_IN_CIRCUITS = [
       application: '50/60Hz mains hum elimination in ECG biomedical monitors, anti-whistle acoustic feedback traps.'
     },
     limitations: 'Requires high Q components to achieve narrow notch depth without broad passband attenuation.'
+  },
+
+  // 16. Non-Inverting Operational Amplifier (Phase 28 Verified Active Engine)
+  {
+    circuitType: 'OPAMP_NON_INVERTING',
+    circuitId: 'OPAMP_NON_INVERTING',
+    displayName: 'Non-Inverting Op-Amp Amplifier',
+    category: CIRCUIT_CATEGORIES.AMPLIFIER,
+    description: 'Active closed-loop operational amplifier configuration with input applied directly to the non-inverting (+) terminal, yielding non-inverting gain Av = 1 + Rf/Rg and high input impedance.',
+    requiredComponents: [
+      { role: 'opamp', type: 'opamp', minCount: 1, maxCount: 1, label: 'Operational Amplifier IC (e.g. LM741, TL072, LM358)' },
+      { role: 'resistor_feedback', type: 'resistor', minCount: 1, maxCount: 1, label: 'Feedback Resistor (Rf)' },
+      { role: 'resistor_gain', type: 'resistor', minCount: 1, maxCount: 1, label: 'Gain-Setting Resistor (Rg)' }
+    ],
+    topologyRequirements: {
+      minOpamps: 1,
+      minResistors: 2,
+      rules: [
+        'Input signal Vin applied to non-inverting (+) input terminal',
+        'Feedback resistor Rf connected between output terminal and inverting (-) input terminal',
+        'Gain resistor Rg connected between inverting (-) input terminal and ground reference',
+        'Output voltage Vout = Vin × (1 + Rf / Rg)',
+        'Output phase is in-phase (0° shift)'
+      ]
+    },
+    electricalModel: 'OPAMP_NON_INVERTING_MODEL',
+    requiredParameters: ['rf', 'rg', 'v_in'],
+    equations: {
+      voltageGain: 'Av = 1 + (Rf / Rg)',
+      voltageGainDb: 'Av_dB = 20 × log10(1 + Rf / Rg)',
+      outputVoltage: 'Vout = Vin × (1 + Rf / Rg)',
+      phaseShift: 'φ = 0°'
+    },
+    visualizationType: VISUALIZATION_TYPES.OPAMP_AMPLIFIER,
+    explanationTemplate: {
+      governingLaw: 'Negative Feedback & Virtual Short Principle',
+      formulaSummary: 'Av = 1 + (Rf / Rg),  Vout = Vin × Av,  Phase = 0°',
+      purpose: 'Amplifies weak input signals without inverting polarity while providing very high input impedance.',
+      application: 'Sensor signal pre-amplifiers, audio preamps, active filter gain stages, instrumentation buffering.'
+    },
+    limitations: 'Gain-bandwidth product (GBWP) limits high-frequency bandwidth. Output voltage is clamped by supply rails.'
+  },
+
+  // 17. Inverting Operational Amplifier (Phase 28 Verified Active Engine)
+  {
+    circuitType: 'OPAMP_INVERTING',
+    circuitId: 'OPAMP_INVERTING',
+    displayName: 'Inverting Op-Amp Amplifier',
+    category: CIRCUIT_CATEGORIES.AMPLIFIER,
+    description: 'Active closed-loop operational amplifier configuration with input applied through Rin to the inverting (-) terminal and non-inverting (+) grounded, yielding inverted gain Av = -Rf/Rin.',
+    requiredComponents: [
+      { role: 'opamp', type: 'opamp', minCount: 1, maxCount: 1, label: 'Operational Amplifier IC (e.g. LM741, TL072, LM358)' },
+      { role: 'resistor_input', type: 'resistor', minCount: 1, maxCount: 1, label: 'Input Resistor (Rin)' },
+      { role: 'resistor_feedback', type: 'resistor', minCount: 1, maxCount: 1, label: 'Feedback Resistor (Rf)' }
+    ],
+    topologyRequirements: {
+      minOpamps: 1,
+      minResistors: 2,
+      rules: [
+        'Input signal Vin applied through Rin to inverting (-) input terminal',
+        'Feedback resistor Rf connected between output terminal and inverting (-) input terminal',
+        'Non-inverting (+) input terminal connected to ground reference (virtual ground at inverting node)',
+        'Output voltage Vout = -Vin × (Rf / Rin)',
+        'Output phase is inverted (180° shift)'
+      ]
+    },
+    electricalModel: 'OPAMP_INVERTING_MODEL',
+    requiredParameters: ['rf', 'rin', 'v_in'],
+    equations: {
+      voltageGain: 'Av = - (Rf / Rin)',
+      voltageGainDb: 'Av_dB = 20 × log10(Rf / Rin)',
+      outputVoltage: 'Vout = -Vin × (Rf / Rin)',
+      phaseShift: 'φ = 180°'
+    },
+    visualizationType: VISUALIZATION_TYPES.OPAMP_INVERTING,
+    explanationTemplate: {
+      governingLaw: 'Virtual Ground & Current Summing',
+      formulaSummary: 'Av = - (Rf / Rin),  Vout = -Vin × (Rf / Rin),  Phase = 180°',
+      purpose: 'Amplifies and inverts input signals with precise gain set by resistor ratio.',
+      application: 'Audio mixing consoles (virtual ground summing), signal polarity inverters, active filters, DAC I-to-V converters.'
+    },
+    limitations: 'Input impedance is limited to Rin. Bandwidth is constrained by GBWP / |Av|.'
+  },
+
+  // 18. Voltage Follower / Unity-Gain Buffer (Phase 28 Verified Active Engine)
+  {
+    circuitType: 'OPAMP_VOLTAGE_FOLLOWER',
+    circuitId: 'OPAMP_VOLTAGE_FOLLOWER',
+    displayName: 'Op-Amp Voltage Follower (Buffer)',
+    category: CIRCUIT_CATEGORIES.AMPLIFIER,
+    description: 'Active unity-gain buffer configuration with 100% negative feedback (direct output-to-inverting connection), providing unity gain Av ≈ 1, near-infinite Zin, and near-zero Zout.',
+    requiredComponents: [
+      { role: 'opamp', type: 'opamp', minCount: 1, maxCount: 1, label: 'Operational Amplifier IC (e.g. LM741, TL072, LM358)' }
+    ],
+    topologyRequirements: {
+      minOpamps: 1,
+      rules: [
+        'Input signal Vin applied directly to non-inverting (+) input terminal',
+        'Output terminal connected directly (or via low-resistance jumper) to inverting (-) input terminal',
+        '100% negative feedback ensures Vout = Vin',
+        'Voltage gain Av = 1.0 (0 dB), Phase shift φ = 0°'
+      ]
+    },
+    electricalModel: 'OPAMP_VOLTAGE_FOLLOWER_MODEL',
+    requiredParameters: ['v_in'],
+    equations: {
+      voltageGain: 'Av ≈ 1.0',
+      voltageGainDb: 'Av_dB = 0.0 dB',
+      outputVoltage: 'Vout ≈ Vin',
+      phaseShift: 'φ = 0°'
+    },
+    visualizationType: VISUALIZATION_TYPES.OPAMP_FOLLOWER,
+    explanationTemplate: {
+      governingLaw: '100% Negative Feedback Unity Tracking',
+      formulaSummary: 'Av ≈ 1.0,  Vout = Vin,  Zin ≈ ∞,  Zout ≈ 0',
+      purpose: 'Isolates high-impedance signal sources from low-impedance loads to prevent signal loading/sagging.',
+      application: 'High-impedance sensor interfaces, DAC output buffers, sample-and-hold circuits, ADC input drivers.'
+    },
+    limitations: 'Maximum bandwidth equal to unity-gain frequency (GBWP). Slew rate limits large-signal high-frequency tracking.'
+  },
+
+  // 19. Architecture Placeholders (Unsupported in Phase 28 per SPEC)
+  {
+    circuitType: 'ACTIVE_LOW_PASS',
+    circuitId: 'ACTIVE_LOW_PASS',
+    displayName: 'Active Low-Pass Filter (Architecture Placeholder)',
+    category: CIRCUIT_CATEGORIES.AC,
+    description: 'Active operational amplifier low-pass filter (architectural placeholder).',
+    requiredComponents: [{ role: 'opamp', type: 'opamp' }, { role: 'resistor', type: 'resistor' }, { role: 'capacitor', type: 'capacitor' }],
+    topologyRequirements: { minOpamps: 1, minCapacitors: 1 },
+    electricalModel: 'UNSUPPORTED_ACTIVE_FILTER',
+    visualizationType: VISUALIZATION_TYPES.ACTIVE_FILTER,
+    explanationTemplate: { governingLaw: 'Active Frequency Shaping', formulaSummary: 'Architecture Placeholder' },
+    limitations: 'Unsupported in Phase 28 release.'
+  },
+  {
+    circuitType: 'SALLEN_KEY',
+    circuitId: 'SALLEN_KEY',
+    displayName: 'Sallen-Key Active Filter (Architecture Placeholder)',
+    category: CIRCUIT_CATEGORIES.AC,
+    description: 'Second-order Sallen-Key active filter (architectural placeholder).',
+    requiredComponents: [{ role: 'opamp', type: 'opamp' }, { role: 'resistor', type: 'resistor' }, { role: 'capacitor', type: 'capacitor' }],
+    topologyRequirements: { minOpamps: 1, minCapacitors: 2 },
+    electricalModel: 'UNSUPPORTED_SALLEN_KEY',
+    visualizationType: VISUALIZATION_TYPES.ACTIVE_FILTER,
+    explanationTemplate: { governingLaw: 'Second-Order VCVS Active Sallen-Key Topology', formulaSummary: 'Architecture Placeholder' },
+    limitations: 'Unsupported in Phase 28 release.'
   }
 ];
 
