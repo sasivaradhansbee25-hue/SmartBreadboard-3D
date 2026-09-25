@@ -302,7 +302,7 @@ export function classifyCircuitTopology(netlist, simulationResult = null) {
     }
   }
 
-  // 3. RC Charging / Low-Pass Filter Rule
+  // 3. RC Filter & Charging Rules
   if (typeCounts.resistor === 1 && typeCounts.capacitor === 1 && typeCounts.led === 0 && typeCounts.inductor === 0) {
     const r1 = compsByType.resistor[0];
     const c1 = compsByType.capacitor[0];
@@ -319,7 +319,33 @@ export function classifyCircuitTopology(netlist, simulationResult = null) {
       const otherC = [...cNodes].find(n => n !== intermediate);
 
       const isCConnectedToGround = isGroundNode(otherC) || otherC?.includes('GND') || otherC?.includes('BOT');
+      const isRConnectedToGround = isGroundNode(otherR) || otherR?.includes('GND') || otherR?.includes('BOT');
 
+      // Check RC High-Pass: C connected to input, R connected to ground, intermediate is output
+      if (isRConnectedToGround && !isCConnectedToGround) {
+        return {
+          circuitType: 'RC_HIGH_PASS',
+          displayName: 'RC High-Pass Filter',
+          category: 'AC',
+          verificationState: VERIFICATION_STATES.VERIFIED,
+          confidence: 0.96,
+          topologyStatus: 'VALID_RC_HIGH_PASS',
+          electricalModelStatus: 'AVAILABLE',
+          parameters: {
+            r: r1.id || r1.designator,
+            c: c1.id || c1.designator,
+            node_in: otherC,
+            node_out: intermediate,
+            node_gnd: otherR
+          },
+          matchedComponents: { r: r1, c: c1 },
+          visualizationType: VISUALIZATION_TYPES.AC_HIGH_PASS,
+          warnings: [],
+          missingRequirements: []
+        };
+      }
+
+      // RC Low-Pass / Charging: R connected to input, C connected to ground, intermediate is output
       return {
         circuitType: 'RC_CHARGING',
         displayName: 'RC Charging & Low-Pass Filter',
@@ -359,6 +385,73 @@ export function classifyCircuitTopology(netlist, simulationResult = null) {
         warnings: [],
         missingRequirements: []
       };
+    }
+  }
+
+  // 3b. RL Filter Rules (Phase 27)
+  if (typeCounts.resistor === 1 && typeCounts.inductor === 1 && typeCounts.capacitor === 0 && typeCounts.led === 0) {
+    const r1 = compsByType.resistor[0];
+    const l1 = compsByType.inductor[0];
+    const nR1 = getComponentNodes(r1);
+    const nL1 = getComponentNodes(l1);
+
+    const rNodes = new Set([nR1.node1, nR1.node2].filter(Boolean));
+    const lNodes = new Set([nL1.node1, nL1.node2].filter(Boolean));
+    const shared = [...rNodes].filter(n => lNodes.has(n));
+
+    if (shared.length === 1) {
+      const intermediate = shared[0];
+      const otherR = [...rNodes].find(n => n !== intermediate);
+      const otherL = [...lNodes].find(n => n !== intermediate);
+
+      const isRConnectedToGround = isGroundNode(otherR) || otherR?.includes('GND') || otherR?.includes('BOT');
+      const isLConnectedToGround = isGroundNode(otherL) || otherL?.includes('GND') || otherL?.includes('BOT');
+
+      if (isRConnectedToGround) {
+        // RL Low-Pass: L is series from IN to intermediate, R is shunt to GND
+        return {
+          circuitType: 'RL_LOW_PASS',
+          displayName: 'RL Low-Pass Filter',
+          category: 'AC',
+          verificationState: VERIFICATION_STATES.VERIFIED,
+          confidence: 0.96,
+          topologyStatus: 'VALID_RL_LOW_PASS',
+          electricalModelStatus: 'AVAILABLE',
+          parameters: {
+            r: r1.id || r1.designator,
+            l: l1.id || l1.designator,
+            node_in: otherL,
+            node_out: intermediate,
+            node_gnd: otherR
+          },
+          matchedComponents: { r: r1, l: l1 },
+          visualizationType: VISUALIZATION_TYPES.AC_LOW_PASS,
+          warnings: [],
+          missingRequirements: []
+        };
+      } else if (isLConnectedToGround) {
+        // RL High-Pass: R is series from IN to intermediate, L is shunt to GND
+        return {
+          circuitType: 'RL_HIGH_PASS',
+          displayName: 'RL High-Pass Filter',
+          category: 'AC',
+          verificationState: VERIFICATION_STATES.VERIFIED,
+          confidence: 0.96,
+          topologyStatus: 'VALID_RL_HIGH_PASS',
+          electricalModelStatus: 'AVAILABLE',
+          parameters: {
+            r: r1.id || r1.designator,
+            l: l1.id || l1.designator,
+            node_in: otherR,
+            node_out: intermediate,
+            node_gnd: otherL
+          },
+          matchedComponents: { r: r1, l: l1 },
+          visualizationType: VISUALIZATION_TYPES.AC_HIGH_PASS,
+          warnings: [],
+          missingRequirements: []
+        };
+      }
     }
   }
 

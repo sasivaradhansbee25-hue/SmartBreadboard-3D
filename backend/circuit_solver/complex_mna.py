@@ -117,13 +117,21 @@ def solve_ac_frequency_point(netlist: Dict[str, Any], frequency_hz: float) -> Di
         if "voltage" in stype or "ac" in stype or "dc" in stype or "source" in stype:
             voltage_sources.append(s)
 
-    # If no sources in netlist, supply a default 1V AC source between first node and GND
+    # If no sources in netlist, supply a default 1V AC source between input node and GND
     if not voltage_sources and num_nodes > 0:
+        pos_node = None
+        for n in node_list:
+            if "VIN" in str(n).upper() or "VCC" in str(n).upper() or "PWR" in str(n).upper() or "IN" in str(n).upper():
+                pos_node = n
+                break
+        if not pos_node:
+            pos_node = node_list[0]
+
         voltage_sources.append({
             "id": "V_AC_TEST",
             "type": "ac_voltage",
             "voltage": 1.0,
-            "positive_node": node_list[0],
+            "positive_node": pos_node,
             "negative_node": ground_node_id,
             "phase_deg": 0.0
         })

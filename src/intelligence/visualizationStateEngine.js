@@ -500,42 +500,121 @@ export function generateVisualizationState(classification, electricalBehaviour, 
   }
 
   // =========================================================================
-  // 7. RLC PARALLEL RESONANCE VISUALIZATION (Phase 26)
+  // 8. RC LOW-PASS & HIGH-PASS VISUALIZATION (Phase 27)
   // =========================================================================
-  if (circuitType === 'RLC_PARALLEL_RESONANCE') {
+  if (circuitType === 'RC_LOW_PASS' || circuitType === 'RC_HIGH_PASS') {
+    const isLowPass = circuitType === 'RC_LOW_PASS';
+    const r = matchedComponents?.resistor || matchedComponents?.r;
+    const c = matchedComponents?.capacitor || matchedComponents?.c;
+    const p = electricalBehaviour?.parameters;
+
+    if (r) compHighlights[r.id || r.designator] = { role: isLowPass ? 'SERIES_RESISTOR' : 'SHUNT_RESISTOR', roleLabel: isLowPass ? 'Series R' : 'Shunt R', color: '#38bdf8', haloIntensity: 0.9, pulseSpeed: 1.0 };
+    if (c) compHighlights[c.id || c.designator] = { role: isLowPass ? 'SHUNT_CAPACITOR' : 'SERIES_CAPACITOR', roleLabel: isLowPass ? 'Shunt C' : 'Series C', color: '#ec4899', haloIntensity: 1.0, pulseSpeed: 1.5 };
+
+    return {
+      status: 'VERIFIED',
+      circuitType,
+      visualizationType: isLowPass ? VISUALIZATION_TYPES.AC_LOW_PASS : VISUALIZATION_TYPES.AC_HIGH_PASS,
+      isEducationalAnimationActive: true,
+      componentHighlights: compHighlights,
+      currentFlow: { enabled: true, branches: [] },
+      signalFlow: { type: 'AC_FILTER', active: true, mode: isLowPass ? 'LOW_PASS' : 'HIGH_PASS' },
+      nodeVoltages,
+      waveforms: electricalBehaviour?.waveforms || [],
+      filterState: {
+        cutoffFrequency: p?.cutoffFrequency?.formatted || 'N/A',
+        mode: isLowPass ? 'LOW_PASS' : 'HIGH_PASS',
+        rollOff: '-20 dB/dec'
+      },
+      transientState: null,
+      educationalAnnotations: [
+        {
+          id: `anno-rc-${isLowPass ? 'lp' : 'hp'}-1`,
+          target: parameters?.node_out || 'Vout',
+          title: isLowPass ? 'RC Low-Pass Filter Output' : 'RC High-Pass Filter Output',
+          text: `Cutoff fc (-3dB) = ${p?.cutoffFrequency?.formatted || '1.59 kHz'}`
+        }
+      ],
+      warningBanner: null
+    };
+  }
+
+  // =========================================================================
+  // 9. RL LOW-PASS & HIGH-PASS VISUALIZATION (Phase 27)
+  // =========================================================================
+  if (circuitType === 'RL_LOW_PASS' || circuitType === 'RL_HIGH_PASS') {
+    const isLowPass = circuitType === 'RL_LOW_PASS';
+    const r = matchedComponents?.resistor || matchedComponents?.r;
+    const l = matchedComponents?.inductor || matchedComponents?.l;
+    const p = electricalBehaviour?.parameters;
+
+    if (r) compHighlights[r.id || r.designator] = { role: isLowPass ? 'SHUNT_RESISTOR' : 'SERIES_RESISTOR', roleLabel: isLowPass ? 'Shunt R' : 'Series R', color: '#38bdf8', haloIntensity: 0.9, pulseSpeed: 1.0 };
+    if (l) compHighlights[l.id || l.designator] = { role: isLowPass ? 'SERIES_INDUCTOR' : 'SHUNT_INDUCTOR', roleLabel: isLowPass ? 'Series L' : 'Shunt L', color: '#a855f7', haloIntensity: 1.0, pulseSpeed: 1.5 };
+
+    return {
+      status: 'VERIFIED',
+      circuitType,
+      visualizationType: isLowPass ? VISUALIZATION_TYPES.AC_LOW_PASS : VISUALIZATION_TYPES.AC_HIGH_PASS,
+      isEducationalAnimationActive: true,
+      componentHighlights: compHighlights,
+      currentFlow: { enabled: true, branches: [] },
+      signalFlow: { type: 'AC_FILTER', active: true, mode: isLowPass ? 'LOW_PASS' : 'HIGH_PASS' },
+      nodeVoltages,
+      waveforms: electricalBehaviour?.waveforms || [],
+      filterState: {
+        cutoffFrequency: p?.cutoffFrequency?.formatted || 'N/A',
+        mode: isLowPass ? 'LOW_PASS' : 'HIGH_PASS',
+        rollOff: '-20 dB/dec'
+      },
+      transientState: null,
+      educationalAnnotations: [
+        {
+          id: `anno-rl-${isLowPass ? 'lp' : 'hp'}-1`,
+          target: parameters?.node_out || 'Vout',
+          title: isLowPass ? 'RL Low-Pass Output' : 'RL High-Pass Output',
+          text: `Cutoff fc (-3dB) = ${p?.cutoffFrequency?.formatted || '1.59 kHz'}`
+        }
+      ],
+      warningBanner: null
+    };
+  }
+
+  // =========================================================================
+  // 10. RLC BAND-PASS VISUALIZATION (Phase 27)
+  // =========================================================================
+  if (circuitType === 'RLC_BAND_PASS') {
     const r = matchedComponents?.resistor;
     const l = matchedComponents?.inductor;
     const c = matchedComponents?.capacitor;
     const p = electricalBehaviour?.parameters;
 
-    if (r) compHighlights[r.id || r.designator] = { role: 'TANK_RESISTOR', roleLabel: 'Tank Resistor (R)', color: '#38bdf8', haloIntensity: 0.8, pulseSpeed: 1.0 };
-    if (l) compHighlights[l.id || l.designator] = { role: 'TANK_INDUCTOR', roleLabel: 'Tank Inductor (L)', color: '#a855f7', haloIntensity: 1.1, pulseSpeed: 1.8 };
-    if (c) compHighlights[c.id || c.designator] = { role: 'TANK_CAPACITOR', roleLabel: 'Tank Capacitor (C)', color: '#ec4899', haloIntensity: 1.1, pulseSpeed: 1.8 };
+    if (r) compHighlights[r.id || r.designator] = { role: 'LOAD_RESISTOR', roleLabel: 'Load R', color: '#38bdf8', haloIntensity: 0.8, pulseSpeed: 1.0 };
+    if (l) compHighlights[l.id || l.designator] = { role: 'TUNING_INDUCTOR', roleLabel: 'Tuning L', color: '#a855f7', haloIntensity: 1.1, pulseSpeed: 1.8 };
+    if (c) compHighlights[c.id || c.designator] = { role: 'TUNING_CAPACITOR', roleLabel: 'Tuning C', color: '#ec4899', haloIntensity: 1.1, pulseSpeed: 1.8 };
 
     return {
       status: 'VERIFIED',
       circuitType,
-      visualizationType: VISUALIZATION_TYPES.RESONANCE_CURVE,
+      visualizationType: VISUALIZATION_TYPES.AC_BAND_PASS,
       isEducationalAnimationActive: true,
       componentHighlights: compHighlights,
       currentFlow: { enabled: true, branches: [] },
-      signalFlow: { type: 'AC_RESONANCE', active: true, phaseDeg: 0.0 },
+      signalFlow: { type: 'AC_BANDPASS', active: true },
       nodeVoltages,
       waveforms: electricalBehaviour?.waveforms || [],
       resonanceState: {
         active: true,
         f0: p?.f0?.formatted || 'N/A',
-        qFactor: p?.qFactor?.formatted || 'N/A',
         bandwidth: p?.bandwidth?.formatted || 'N/A',
-        mode: 'PARALLEL'
+        qFactor: p?.qFactor?.formatted || 'N/A'
       },
       transientState: null,
       educationalAnnotations: [
         {
-          id: 'anno-rlc-par-1',
-          target: 'TANK_LOOP',
-          title: 'Parallel Resonance Tank',
-          text: `At f₀ = ${p?.f0?.formatted || 'Resonance'}: BL = BC, impedance reaches maximum |Z| = R`
+          id: 'anno-rlc-bp-1',
+          target: 'Vout',
+          title: 'RLC Band-Pass Center Peak',
+          text: `Peak transmission at f₀ = ${p?.f0?.formatted || 'N/A'}`
         }
       ],
       warningBanner: null

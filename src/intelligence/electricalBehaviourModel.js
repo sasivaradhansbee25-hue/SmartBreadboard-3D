@@ -23,6 +23,9 @@ function extractNumericValue(comp, defaultVal = 1000.0) {
   if (!raw) return defaultVal;
 
   const parsed = parseComponentValue(String(raw));
+  if (parsed && typeof parsed.siValue === 'number' && !isNaN(parsed.siValue)) {
+    return parsed.siValue;
+  }
   if (parsed && typeof parsed.numericValue === 'number' && !isNaN(parsed.numericValue)) {
     return parsed.numericValue;
   }
@@ -424,6 +427,296 @@ export function calculateCircuitBehaviour(classification, netlist, simulationRes
         },
         waveforms: [],
         governingEquation: 'f₀ = 1 / [ 2π√(L × C) ],  Q = R × √(C / L),  BW = f₀ / Q'
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // 9. RC LOW-PASS FILTER (Phase 27)
+    // -----------------------------------------------------------------------
+    case 'RC_LOW_PASS': {
+      const rComp = matchedComponents?.resistor || matchedComponents?.r;
+      const cComp = matchedComponents?.capacitor || matchedComponents?.c;
+      const r = extractNumericValue(rComp, 1000.0);
+      let c = extractNumericValue(cComp, 100e-9);
+      if (c > 1.0) c = c * 1e-6;
+
+      const tau = r * c;
+      const fcHz = 1.0 / (2.0 * Math.PI * Math.max(tau, 1e-15));
+
+      // Generate 60-point frequency response sweep from 0.05*fc to 50*fc
+      const numPoints = 60;
+      const fMin = Math.max(0.5, fcHz * 0.05);
+      const fMax = fcHz * 50.0;
+      const logMin = Math.log10(fMin);
+      const logMax = Math.log10(fMax);
+      const sweepPoints = [];
+
+      for (let i = 0; i <= numPoints; i++) {
+        const f = Math.pow(10, logMin + (i / numPoints) * (logMax - logMin));
+        const w = 2.0 * Math.PI * f;
+        const xc = 1.0 / (w * c);
+        const gainMag = xc / Math.sqrt(r * r + xc * xc); // 1 / sqrt(1 + (wRC)^2)
+        const magDb = 20.0 * Math.log10(Math.max(gainMag, 1e-6));
+        const phaseDeg = -Math.atan2(w * tau, 1.0) * (180.0 / Math.PI);
+
+        sweepPoints.push({
+          frequencyHz: Number(f.toFixed(2)),
+          omegaRadS: Number(w.toFixed(2)),
+          gainMagnitude: Number(gainMag.toFixed(4)),
+          magnitudeDb: Number(magDb.toFixed(2)),
+          phaseDeg: Number(phaseDeg.toFixed(2)),
+          currentMagnitudeMa: Number(((vSupply / Math.sqrt(r * r + xc * xc)) * 1000.0).toFixed(3))
+        });
+      }
+
+      return {
+        status: 'SOLVED_THEORETICAL',
+        circuitType,
+        sourceVoltage: { value: vSupply, unit: 'V', label: 'AC Excitation (Vin)', source: 'nominal_supply', is_measured: false },
+        parameters: {
+          r: { value: r, unit: 'Ω', formatted: `${r >= 1000 ? (r / 1000).toFixed(2) + ' kΩ' : r.toFixed(1) + ' Ω'}`, label: 'Series Resistance (R)', source: 'component_value', is_measured: false },
+          c: { value: c, unit: 'F', formatted: `${c < 1e-6 ? (c * 1e9).toFixed(1) + ' nF' : (c * 1e6).toFixed(2) + ' µF'}`, label: 'Shunt Capacitance (C)', source: 'component_value', is_measured: false },
+          tau: { value: tau * 1000.0, unit: 'ms', formatted: `${(tau * 1000.0).toFixed(3)} ms`, label: 'Time Constant (τ = RC)', source: 'theoretical_model', is_measured: false },
+          cutoffFrequency: { value: fcHz, unit: 'Hz', formatted: `${fcHz >= 1000 ? (fcHz / 1000).toFixed(3) + ' kHz' : fcHz.toFixed(2) + ' Hz'}`, label: 'Cutoff Frequency (-3dB fc)', source: 'theoretical_model', is_measured: false },
+          gainAtDc: { value: 1.0, unit: '', formatted: '1.00 (0 dB)', label: 'DC Passband Gain', source: 'theoretical_model', is_measured: false },
+          phaseAtCutoff: { value: -45.0, unit: '°', formatted: '-45.0°', label: 'Phase at Cutoff ∠H(fc)', source: 'theoretical_model', is_measured: false }
+        },
+        waveforms: [
+          {
+            name: 'RC Low-Pass Frequency Response |H(f)| & Phase',
+            type: 'frequency_response',
+            xAxis: 'Frequency (Hz)',
+            yAxis: 'Gain (dB)',
+            fcHz: Number(fcHz.toFixed(2)),
+            points: sweepPoints
+          }
+        ],
+        governingEquation: 'fc = 1 / (2πRC),  |H(jω)| = 1 / √(1 + (ωRC)²),  ∠H(jω) = -arctan(ωRC)'
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // 10. RC HIGH-PASS FILTER (Phase 27)
+    // -----------------------------------------------------------------------
+    case 'RC_HIGH_PASS': {
+      const rComp = matchedComponents?.resistor || matchedComponents?.r;
+      const cComp = matchedComponents?.capacitor || matchedComponents?.c;
+      const r = extractNumericValue(rComp, 1000.0);
+      let c = extractNumericValue(cComp, 100e-9);
+      if (c > 1.0) c = c * 1e-6;
+
+      const tau = r * c;
+      const fcHz = 1.0 / (2.0 * Math.PI * Math.max(tau, 1e-15));
+
+      const numPoints = 60;
+      const fMin = Math.max(0.5, fcHz * 0.05);
+      const fMax = fcHz * 50.0;
+      const logMin = Math.log10(fMin);
+      const logMax = Math.log10(fMax);
+      const sweepPoints = [];
+
+      for (let i = 0; i <= numPoints; i++) {
+        const f = Math.pow(10, logMin + (i / numPoints) * (logMax - logMin));
+        const w = 2.0 * Math.PI * f;
+        const xc = 1.0 / (w * c);
+        const gainMag = (w * tau) / Math.sqrt(1 + Math.pow(w * tau, 2));
+        const magDb = 20.0 * Math.log10(Math.max(gainMag, 1e-6));
+        const phaseDeg = 90.0 - Math.atan2(w * tau, 1.0) * (180.0 / Math.PI);
+
+        sweepPoints.push({
+          frequencyHz: Number(f.toFixed(2)),
+          omegaRadS: Number(w.toFixed(2)),
+          gainMagnitude: Number(gainMag.toFixed(4)),
+          magnitudeDb: Number(magDb.toFixed(2)),
+          phaseDeg: Number(phaseDeg.toFixed(2)),
+          currentMagnitudeMa: Number(((vSupply / Math.sqrt(r * r + xc * xc)) * 1000.0).toFixed(3))
+        });
+      }
+
+      return {
+        status: 'SOLVED_THEORETICAL',
+        circuitType,
+        sourceVoltage: { value: vSupply, unit: 'V', label: 'AC Excitation (Vin)', source: 'nominal_supply', is_measured: false },
+        parameters: {
+          r: { value: r, unit: 'Ω', formatted: `${r >= 1000 ? (r / 1000).toFixed(2) + ' kΩ' : r.toFixed(1) + ' Ω'}`, label: 'Shunt Resistance (R)', source: 'component_value', is_measured: false },
+          c: { value: c, unit: 'F', formatted: `${c < 1e-6 ? (c * 1e9).toFixed(1) + ' nF' : (c * 1e6).toFixed(2) + ' µF'}`, label: 'Series Capacitance (C)', source: 'component_value', is_measured: false },
+          tau: { value: tau * 1000.0, unit: 'ms', formatted: `${(tau * 1000.0).toFixed(3)} ms`, label: 'Time Constant (τ = RC)', source: 'theoretical_model', is_measured: false },
+          cutoffFrequency: { value: fcHz, unit: 'Hz', formatted: `${fcHz >= 1000 ? (fcHz / 1000).toFixed(3) + ' kHz' : fcHz.toFixed(2) + ' Hz'}`, label: 'Cutoff Frequency (-3dB fc)', source: 'theoretical_model', is_measured: false },
+          gainAtHighF: { value: 1.0, unit: '', formatted: '1.00 (0 dB)', label: 'High-Frequency Passband Gain', source: 'theoretical_model', is_measured: false },
+          phaseAtCutoff: { value: 45.0, unit: '°', formatted: '+45.0°', label: 'Phase at Cutoff ∠H(fc)', source: 'theoretical_model', is_measured: false }
+        },
+        waveforms: [
+          {
+            name: 'RC High-Pass Frequency Response |H(f)| & Phase',
+            type: 'frequency_response',
+            xAxis: 'Frequency (Hz)',
+            yAxis: 'Gain (dB)',
+            fcHz: Number(fcHz.toFixed(2)),
+            points: sweepPoints
+          }
+        ],
+        governingEquation: 'fc = 1 / (2πRC),  |H(jω)| = (ωRC) / √(1 + (ωRC)²),  ∠H(jω) = 90° - arctan(ωRC)'
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // 11. RL LOW-PASS FILTER (Phase 27)
+    // -----------------------------------------------------------------------
+    case 'RL_LOW_PASS': {
+      const rComp = matchedComponents?.resistor || matchedComponents?.r;
+      const lComp = matchedComponents?.inductor || matchedComponents?.l;
+      const r = extractNumericValue(rComp, 1000.0);
+      let l = extractNumericValue(lComp, 0.1);
+      if (l > 10.0) l = l * 1e-3;
+
+      const fcHz = r / (2.0 * Math.PI * Math.max(l, 1e-12));
+      const tau = l / Math.max(r, 1e-6);
+
+      const numPoints = 60;
+      const fMin = Math.max(0.5, fcHz * 0.05);
+      const fMax = fcHz * 50.0;
+      const logMin = Math.log10(fMin);
+      const logMax = Math.log10(fMax);
+      const sweepPoints = [];
+
+      for (let i = 0; i <= numPoints; i++) {
+        const f = Math.pow(10, logMin + (i / numPoints) * (logMax - logMin));
+        const w = 2.0 * Math.PI * f;
+        const xl = w * l;
+        const gainMag = r / Math.sqrt(r * r + xl * xl);
+        const magDb = 20.0 * Math.log10(Math.max(gainMag, 1e-6));
+        const phaseDeg = -Math.atan2(xl, r) * (180.0 / Math.PI);
+
+        sweepPoints.push({
+          frequencyHz: Number(f.toFixed(2)),
+          omegaRadS: Number(w.toFixed(2)),
+          gainMagnitude: Number(gainMag.toFixed(4)),
+          magnitudeDb: Number(magDb.toFixed(2)),
+          phaseDeg: Number(phaseDeg.toFixed(2)),
+          currentMagnitudeMa: Number(((vSupply / Math.sqrt(r * r + xl * xl)) * 1000.0).toFixed(3))
+        });
+      }
+
+      return {
+        status: 'SOLVED_THEORETICAL',
+        circuitType,
+        sourceVoltage: { value: vSupply, unit: 'V', label: 'AC Excitation (Vin)', source: 'nominal_supply', is_measured: false },
+        parameters: {
+          r: { value: r, unit: 'Ω', formatted: `${r >= 1000 ? (r / 1000).toFixed(2) + ' kΩ' : r.toFixed(1) + ' Ω'}`, label: 'Shunt Resistance (R)', source: 'component_value', is_measured: false },
+          l: { value: l, unit: 'H', formatted: `${l < 1 ? (l * 1000).toFixed(2) + ' mH' : l.toFixed(3) + ' H'}`, label: 'Series Inductance (L)', source: 'component_value', is_measured: false },
+          tau: { value: tau * 1000.0, unit: 'ms', formatted: `${(tau * 1000.0).toFixed(3)} ms`, label: 'Time Constant (τ = L/R)', source: 'theoretical_model', is_measured: false },
+          cutoffFrequency: { value: fcHz, unit: 'Hz', formatted: `${fcHz >= 1000 ? (fcHz / 1000).toFixed(3) + ' kHz' : fcHz.toFixed(2) + ' Hz'}`, label: 'Cutoff Frequency (-3dB fc)', source: 'theoretical_model', is_measured: false },
+          phaseAtCutoff: { value: -45.0, unit: '°', formatted: '-45.0°', label: 'Phase at Cutoff ∠H(fc)', source: 'theoretical_model', is_measured: false }
+        },
+        waveforms: [
+          {
+            name: 'RL Low-Pass Frequency Response |H(f)| & Phase',
+            type: 'frequency_response',
+            xAxis: 'Frequency (Hz)',
+            yAxis: 'Gain (dB)',
+            fcHz: Number(fcHz.toFixed(2)),
+            points: sweepPoints
+          }
+        ],
+        governingEquation: 'fc = R / (2πL),  |H(jω)| = R / √(R² + (ωL)²),  ∠H(jω) = -arctan(ωL / R)'
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // 12. RL HIGH-PASS FILTER (Phase 27)
+    // -----------------------------------------------------------------------
+    case 'RL_HIGH_PASS': {
+      const rComp = matchedComponents?.resistor || matchedComponents?.r;
+      const lComp = matchedComponents?.inductor || matchedComponents?.l;
+      const r = extractNumericValue(rComp, 1000.0);
+      let l = extractNumericValue(lComp, 0.1);
+      if (l > 10.0) l = l * 1e-3;
+
+      const fcHz = r / (2.0 * Math.PI * Math.max(l, 1e-12));
+      const tau = l / Math.max(r, 1e-6);
+
+      const numPoints = 60;
+      const fMin = Math.max(0.5, fcHz * 0.05);
+      const fMax = fcHz * 50.0;
+      const logMin = Math.log10(fMin);
+      const logMax = Math.log10(fMax);
+      const sweepPoints = [];
+
+      for (let i = 0; i <= numPoints; i++) {
+        const f = Math.pow(10, logMin + (i / numPoints) * (logMax - logMin));
+        const w = 2.0 * Math.PI * f;
+        const xl = w * l;
+        const gainMag = xl / Math.sqrt(r * r + xl * xl);
+        const magDb = 20.0 * Math.log10(Math.max(gainMag, 1e-6));
+        const phaseDeg = 90.0 - Math.atan2(xl, r) * (180.0 / Math.PI);
+
+        sweepPoints.push({
+          frequencyHz: Number(f.toFixed(2)),
+          omegaRadS: Number(w.toFixed(2)),
+          gainMagnitude: Number(gainMag.toFixed(4)),
+          magnitudeDb: Number(magDb.toFixed(2)),
+          phaseDeg: Number(phaseDeg.toFixed(2)),
+          currentMagnitudeMa: Number(((vSupply / Math.sqrt(r * r + xl * xl)) * 1000.0).toFixed(3))
+        });
+      }
+
+      return {
+        status: 'SOLVED_THEORETICAL',
+        circuitType,
+        sourceVoltage: { value: vSupply, unit: 'V', label: 'AC Excitation (Vin)', source: 'nominal_supply', is_measured: false },
+        parameters: {
+          r: { value: r, unit: 'Ω', formatted: `${r >= 1000 ? (r / 1000).toFixed(2) + ' kΩ' : r.toFixed(1) + ' Ω'}`, label: 'Series Resistance (R)', source: 'component_value', is_measured: false },
+          l: { value: l, unit: 'H', formatted: `${l < 1 ? (l * 1000).toFixed(2) + ' mH' : l.toFixed(3) + ' H'}`, label: 'Shunt Inductance (L)', source: 'component_value', is_measured: false },
+          tau: { value: tau * 1000.0, unit: 'ms', formatted: `${(tau * 1000.0).toFixed(3)} ms`, label: 'Time Constant (τ = L/R)', source: 'theoretical_model', is_measured: false },
+          cutoffFrequency: { value: fcHz, unit: 'Hz', formatted: `${fcHz >= 1000 ? (fcHz / 1000).toFixed(3) + ' kHz' : fcHz.toFixed(2) + ' Hz'}`, label: 'Cutoff Frequency (-3dB fc)', source: 'theoretical_model', is_measured: false },
+          phaseAtCutoff: { value: 45.0, unit: '°', formatted: '+45.0°', label: 'Phase at Cutoff ∠H(fc)', source: 'theoretical_model', is_measured: false }
+        },
+        waveforms: [
+          {
+            name: 'RL High-Pass Frequency Response |H(f)| & Phase',
+            type: 'frequency_response',
+            xAxis: 'Frequency (Hz)',
+            yAxis: 'Gain (dB)',
+            fcHz: Number(fcHz.toFixed(2)),
+            points: sweepPoints
+          }
+        ],
+        governingEquation: 'fc = R / (2πL),  |H(jω)| = (ωL) / √(R² + (ωL)²),  ∠H(jω) = 90° - arctan(ωL / R)'
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // 13. RLC BAND-PASS FILTER (Phase 27)
+    // -----------------------------------------------------------------------
+    case 'RLC_BAND_PASS': {
+      const rComp = matchedComponents?.resistor;
+      const lComp = matchedComponents?.inductor;
+      const cComp = matchedComponents?.capacitor;
+      const r = extractNumericValue(rComp, 100.0);
+      let l = extractNumericValue(lComp, 0.010);
+      let c = extractNumericValue(cComp, 100e-6);
+      if (l > 10.0) l = l * 1e-3;
+      if (c > 1.0) c = c * 1e-6;
+
+      const omega0 = 1.0 / Math.sqrt(Math.max(l * c, 1e-18));
+      const f0Hz = omega0 / (2.0 * Math.PI);
+      const qFactor = (omega0 * l) / Math.max(r, 1e-6);
+      const bwHz = f0Hz / Math.max(qFactor, 1e-4);
+
+      return {
+        status: 'SOLVED_THEORETICAL',
+        circuitType,
+        sourceVoltage: { value: vSupply, unit: 'V', label: 'AC Source (Vin)', source: 'nominal_supply', is_measured: false },
+        parameters: {
+          r: { value: r, unit: 'Ω', formatted: `${r.toFixed(1)} Ω`, label: 'Load Resistor (R)', source: 'component_value', is_measured: false },
+          l: { value: l, unit: 'H', formatted: `${(l * 1000).toFixed(2)} mH`, label: 'Tuning Inductor (L)', source: 'component_value', is_measured: false },
+          c: { value: c, unit: 'F', formatted: `${(c * 1e6).toFixed(2)} µF`, label: 'Tuning Capacitor (C)', source: 'component_value', is_measured: false },
+          f0: { value: f0Hz, unit: 'Hz', formatted: `${f0Hz >= 1000 ? (f0Hz / 1000).toFixed(3) + ' kHz' : f0Hz.toFixed(2) + ' Hz'}`, label: 'Center Frequency (f₀)', source: 'theoretical_model', is_measured: false },
+          qFactor: { value: qFactor, unit: '', formatted: `${qFactor.toFixed(2)}`, label: 'Quality Factor (Q)', source: 'theoretical_model', is_measured: false },
+          bandwidth: { value: bwHz, unit: 'Hz', formatted: `${bwHz.toFixed(2)} Hz`, label: 'Bandwidth (BW = f₀/Q)', source: 'theoretical_model', is_measured: false }
+        },
+        waveforms: [],
+        governingEquation: 'f₀ = 1 / [ 2π√(LC) ],  BW = R / (2πL),  Q = f₀ / BW'
       };
     }
 

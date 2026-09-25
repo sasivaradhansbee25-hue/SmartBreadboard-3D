@@ -214,9 +214,16 @@ export function solveAcPoint(netlist, frequencyHz = 1000.0) {
     }
   }
 
-  // Stamp Vsource across node 0 and GND
+  // Stamp Vsource across candidate input node and GND
   const vSrcIdx = numNodes;
-  const posNodeIdx = numNodes > 0 ? 0 : -1;
+  let posNodeIdx = numNodes > 0 ? 0 : -1;
+  if (numNodes > 0) {
+    const namedInIdx = nonGroundNodes.findIndex(n => {
+      const un = String(n).toUpperCase();
+      return un.includes('VIN') || un.includes('VCC') || un.includes('PWR') || un === 'IN';
+    });
+    if (namedInIdx >= 0) posNodeIdx = namedInIdx;
+  }
   const vMag = 1.0;
 
   if (posNodeIdx >= 0) {
@@ -235,12 +242,15 @@ export function solveAcPoint(netlist, frequencyHz = 1000.0) {
     const iSrcRaw = sol[vSrcIdx];
     const iIn = new Complex(-iSrcRaw.real, -iSrcRaw.imag); // Current flowing into circuit
     const zIn = iIn.mag() > 1e-12 ? new Complex(vMag, 0).div(iIn) : new Complex(1e6, 0);
+    const inNodeName = posNodeIdx >= 0 ? nonGroundNodes[posNodeIdx] : null;
 
     return {
       success: true,
       frequencyHz,
       omegaRadS: omega,
       nodeVoltages,
+      inputNode: inNodeName,
+      groundNode,
       inputImpedance: {
         magnitudeOhms: zIn.mag(),
         phaseDeg: zIn.phaseDeg(),
@@ -252,7 +262,7 @@ export function solveAcPoint(netlist, frequencyHz = 1000.0) {
         magnitudeMa: iIn.mag() * 1000.0,
         phaseDeg: iIn.phaseDeg()
       },
-      primaryNodeVoltage: nonGroundNodes[0] ? nodeVoltages[nonGroundNodes[0]] : new Complex(1, 0)
+      primaryNodeVoltage: (posNodeIdx >= 0 && nodeVoltages[nonGroundNodes[posNodeIdx]]) || (nonGroundNodes[0] ? nodeVoltages[nonGroundNodes[0]] : new Complex(1, 0))
     };
   } catch (err) {
     return {
@@ -348,7 +358,6 @@ export function analyzeClientResonance(sweepResult, isParallel = false) {
   // Find index of zero-phase / extremum
   let resIdx = 0;
   if (!isParallel) {
-    // Series RLC: Current maximum / Impedance minimum
     let maxI = -1;
     iMags.forEach((val, i) => {
       if (val > maxI) {
@@ -357,7 +366,6 @@ export function analyzeClientResonance(sweepResult, isParallel = false) {
       }
     });
   } else {
-    // Parallel RLC: Impedance maximum
     let maxZ = -1;
     zMags.forEach((val, i) => {
       if (val > maxZ) {
@@ -431,5 +439,278 @@ export function analyzeClientResonance(sweepResult, isParallel = false) {
     detectionMethod: 'Complex MNA Frequency Response Extrema & Zero-Phase Crossing',
     source: 'mna_simulation',
     is_measured: false
+  };
+}
+
+/**
+ * Phase 27: Client Transfer Function Extraction H(jω) = Vout / Vin
+ */
+export function extractClientTransferResponse(netlist, sweepResult, inputNode = null, outputNode = null) {
+  const points = sweepResult?.points || [];
+  if (!points.length) {
+    return {
+      success: false,
+      outputStatus: 'NOT_DEFINED',
+      transferPoints: []
+    };
+  }
+
+  // Determine IO nodes if not supplied
+  const firstPt = solveAcPoint(netlist, points[0].frequencyHz);
+  const inN = inputNode || firstPt.inputNode || 'VIN';
+  const gndN = firstPt.groundNode || 'GND';
+
+  let outN = outputNode;
+  if (!outN && firstPt.nodeVoltages) {
+    const keys = Object.keys(firstPt.nodeVoltages).filter(k => k !== gndN && k !== inN);
+    const namedOut = keys.find(k => k.toUpperCase().includes('OUT'));
+    outN = namedOut || keys[0] || inN;
+  }
+
+  const hasDefinedOutput = Boolean(outN && outN !== gndN);
+  const transferPoints = [];
+
+  for (const pt of points) {
+    const f = pt.frequencyHz;
+    const ptMna = solveAcPoint(netlist, f);
+    if (!ptMna.success) continue;
+
+    const vInC = ptMna.nodeVoltages[inN] || new Complex(1, 0);
+    const vOutC = hasDefinedOutput ? (ptMna.nodeVoltages[outN] || new Complex(0, 0)) : null;
+
+    let gainMag = 0;
+    let gainDb = -999;
+    let phaseDeg = 0;
+    let hReal = 0;
+    let hImag = 0;
+
+    if (vOutC) {
+      const hC = vOutC.div(vInC);
+      gainMag = hC.mag();
+      gainDb = 20.0 * Math.log10(Math.max(gainMag, 1e-9));
+      phaseDeg = hC.phaseDeg();
+      hReal = hC.real;
+      hImag = hC.imag;
+    }
+
+    transferPoints.push({
+      frequencyHz: f,
+      omegaRadS: pt.omegaRadS,
+      inputVoltage: {
+        magnitude: Number(vInC.mag().toFixed(4)),
+        phaseDeg: Number(vInC.phaseDeg().toFixed(2)),
+        real: Number(vInC.real.toFixed(4)),
+        imag: Number(vInC.imag.toFixed(4))
+      },
+      outputVoltage: vOutC ? {
+        magnitude: Number(vOutC.mag().toFixed(4)),
+        phaseDeg: Number(vOutC.phaseDeg().toFixed(2)),
+        real: Number(vOutC.real.toFixed(4)),
+        imag: Number(vOutC.imag.toFixed(4))
+      } : null,
+      inputCurrent: {
+        magnitudeMa: pt.currentMagnitudeMa,
+        phaseDeg: pt.currentPhaseDeg
+      },
+      gainMagnitude: Number(gainMag.toFixed(4)),
+      gainDb: Number(gainDb.toFixed(2)),
+      phaseDeg: Number(phaseDeg.toFixed(2)),
+      impedanceMagnitudeOhms: pt.impedanceMagnitudeOhms,
+      impedancePhaseDeg: pt.impedancePhaseDeg,
+      transferReal: Number(hReal.toFixed(4)),
+      transferImag: Number(hImag.toFixed(4)),
+      source: 'mna_simulation',
+      isMeasured: false
+    });
+  }
+
+  return {
+    success: true,
+    inputNode: inN,
+    outputNode: hasDefinedOutput ? outN : null,
+    outputStatus: hasDefinedOutput ? 'DEFINED' : 'NOT_DEFINED',
+    totalPoints: transferPoints.length,
+    transferPoints,
+    source: 'mna_simulation',
+    isMeasured: false
+  };
+}
+
+/**
+ * Phase 27: Client Response Shape Analysis
+ */
+export function analyzeClientResponseShape(transferPoints) {
+  if (!transferPoints || transferPoints.length < 5) {
+    return { status: 'INSUFFICIENT_DATA', isValid: false };
+  }
+
+  const gains = transferPoints.map(p => p.gainMagnitude);
+  const freqs = transferPoints.map(p => p.frequencyHz);
+  const phases = transferPoints.map(p => p.phaseDeg);
+
+  const lowFGain = gains[0];
+  const highFGain = gains[gains.length - 1];
+  const maxGain = Math.max(...gains);
+  const minGain = Math.min(...gains);
+  const maxIdx = gains.indexOf(maxGain);
+  const minIdx = gains.indexOf(minGain);
+
+  const isMonotonicallyDecreasing = gains.every((g, i) => i === 0 || g <= gains[i - 1] + 0.02);
+  const isMonotonicallyIncreasing = gains.every((g, i) => i === 0 || g >= gains[i - 1] - 0.02);
+
+  const isLowPassShape = lowFGain > 0.6 && highFGain < 0.2 && isMonotonicallyDecreasing;
+  const isHighPassShape = lowFGain < 0.2 && highFGain > 0.6 && isMonotonicallyIncreasing;
+  const isBandPassShape = (maxIdx > 0 && maxIdx < gains.length - 1 && maxGain > lowFGain + 0.15 && maxGain > highFGain + 0.15) || (lowFGain < 0.35 && highFGain < 0.35 && maxGain > 0.5 && maxIdx > 0 && maxIdx < gains.length - 1);
+  const isBandStopShape = lowFGain > 0.6 && highFGain > 0.6 && minGain < 0.3 && minIdx > 0 && minIdx < gains.length - 1;
+  const isFlatShape = (maxGain - minGain) < 0.05;
+
+  return {
+    status: 'ANALYZED',
+    isValid: true,
+    lowFrequencyGain: Number(lowFGain.toFixed(4)),
+    highFrequencyGain: Number(highFGain.toFixed(4)),
+    maxGain: Number(maxGain.toFixed(4)),
+    minGain: Number(minGain.toFixed(4)),
+    peakFrequencyHz: isBandPassShape ? freqs[maxIdx] : null,
+    notchFrequencyHz: isBandStopShape ? freqs[minIdx] : null,
+    isMonotonicallyDecreasing,
+    isMonotonicallyIncreasing,
+    isLowPassShape,
+    isHighPassShape,
+    isBandPassShape,
+    isBandStopShape,
+    isFlatShape,
+    phaseLowFreqDeg: phases[0],
+    phaseHighFreqDeg: phases[phases.length - 1]
+  };
+}
+
+/**
+ * Phase 27: Client Cutoff Frequency Detection (-3dB)
+ */
+export function detectClientCutoffFrequencies(transferPoints, shapeAnalysis) {
+  if (!transferPoints || transferPoints.length < 5) {
+    return { status: 'NOT_DETERMINED', fcHz: null, fLowHz: null, fHighHz: null };
+  }
+
+  const freqs = transferPoints.map(p => p.frequencyHz);
+  const gains = transferPoints.map(p => p.gainMagnitude);
+  const maxGain = Math.max(...gains);
+  if (maxGain < 1e-4) {
+    return { status: 'NOT_DETERMINED', fcHz: null };
+  }
+
+  const threshold = maxGain * 0.7071;
+  let fc = null;
+
+  // Low-Pass cutoff
+  if (shapeAnalysis?.isLowPassShape || (gains[0] > threshold && gains[gains.length - 1] < threshold)) {
+    for (let i = 0; i < gains.length - 1; i++) {
+      if (gains[i] >= threshold && gains[i + 1] <= threshold) {
+        const f1 = freqs[i];
+        const f2 = freqs[i + 1];
+        const g1 = gains[i];
+        const g2 = gains[i + 1];
+        if (Math.abs(g2 - g1) > 1e-6) {
+          const ratio = (threshold - g1) / (g2 - g1);
+          const logF = Math.log10(f1) + ratio * (Math.log10(f2) - Math.log10(f1));
+          fc = Math.pow(10, logF);
+        } else {
+          fc = f1;
+        }
+        break;
+      }
+    }
+    if (fc) {
+      return {
+        status: 'DETERMINED',
+        filterMode: 'LOW_PASS',
+        fcHz: Number(fc.toFixed(2)),
+        fcFormatted: fc < 1000 ? `${fc.toFixed(2)} Hz` : `${(fc / 1000).toFixed(3)} kHz`,
+        thresholdMagnitude: Number(threshold.toFixed(4)),
+        referenceGain: Number(maxGain.toFixed(4))
+      };
+    }
+  }
+
+  // High-Pass cutoff
+  if (shapeAnalysis?.isHighPassShape || (gains[0] < threshold && gains[gains.length - 1] > threshold)) {
+    for (let i = 0; i < gains.length - 1; i++) {
+      if (gains[i] <= threshold && gains[i + 1] >= threshold) {
+        const f1 = freqs[i];
+        const f2 = freqs[i + 1];
+        const g1 = gains[i];
+        const g2 = gains[i + 1];
+        if (Math.abs(g2 - g1) > 1e-6) {
+          const ratio = (threshold - g1) / (g2 - g1);
+          const logF = Math.log10(f1) + ratio * (Math.log10(f2) - Math.log10(f1));
+          fc = Math.pow(10, logF);
+        } else {
+          fc = f1;
+        }
+        break;
+      }
+    }
+    if (fc) {
+      return {
+        status: 'DETERMINED',
+        filterMode: 'HIGH_PASS',
+        fcHz: Number(fc.toFixed(2)),
+        fcFormatted: fc < 1000 ? `${fc.toFixed(2)} Hz` : `${(fc / 1000).toFixed(3)} kHz`,
+        thresholdMagnitude: Number(threshold.toFixed(4)),
+        referenceGain: Number(maxGain.toFixed(4))
+      };
+    }
+  }
+
+  return { status: 'NOT_DETERMINED', fcHz: null, fLowHz: null, fHighHz: null };
+}
+
+/**
+ * Phase 27: Client Generalized AC Circuit Analysis Orchestrator
+ */
+export function analyzeClientGeneralizedAcCircuit(netlist, options = {}) {
+  const startF = options.startFrequency || 10.0;
+  const stopF = options.stopFrequency || 100000.0;
+  const points = options.points || 80;
+  const sweepType = options.sweepType || 'log';
+
+  const sweep = runClientFrequencySweep(netlist, startF, stopF, points, sweepType);
+  if (!sweep.success) {
+    return {
+      success: false,
+      status: 'FAILED',
+      error: 'Sweep execution failed',
+      source: 'mna_simulation',
+      isMeasured: false
+    };
+  }
+
+  const isParallelHint = options.topologyType === 'parallel';
+  const resonance = analyzeClientResonance(sweep, isParallelHint);
+  const transfer = extractClientTransferResponse(netlist, sweep, options.inputNode, options.outputNode);
+  const shape = analyzeClientResponseShape(transfer.transferPoints);
+  const cutoff = detectClientCutoffFrequencies(transfer.transferPoints, shape);
+
+  let behavior = 'UNKNOWN';
+  if (shape.isLowPassShape) behavior = 'LOW_PASS';
+  else if (shape.isHighPassShape) behavior = 'HIGH_PASS';
+  else if (shape.isBandPassShape || (resonance.resonanceDetected && transfer.outputNode && transfer.outputNode !== transfer.inputNode)) behavior = 'BAND_PASS';
+  else if (shape.isBandStopShape) behavior = 'BAND_STOP';
+  else if (resonance.resonanceDetected) behavior = 'RESONANT';
+  else if (shape.isFlatShape) behavior = 'FREQUENCY_INDEPENDENT';
+
+  return {
+    success: true,
+    status: behavior !== 'UNKNOWN' ? 'VERIFIED' : 'UNSUPPORTED',
+    behavior,
+    primaryCandidate: behavior,
+    frequencyResponse: transfer,
+    shapeAnalysis: shape,
+    cutoff,
+    resonance,
+    sweep,
+    source: 'mna_simulation',
+    isMeasured: false
   };
 }

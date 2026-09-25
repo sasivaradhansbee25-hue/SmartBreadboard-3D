@@ -39,7 +39,12 @@ export const VISUALIZATION_TYPES = {
   OSCILLATOR_PHASE_WAVEFORM: 'OSCILLATOR_PHASE_WAVEFORM',
   RESONANCE_CURVE: 'RESONANCE_CURVE',
   RECTIFIED_DC_WAVEFORM: 'RECTIFIED_DC_WAVEFORM',
-  GENERIC_DC_FLOW: 'GENERIC_DC_FLOW'
+  GENERIC_DC_FLOW: 'GENERIC_DC_FLOW',
+  AC_LOW_PASS: 'AC_LOW_PASS',
+  AC_HIGH_PASS: 'AC_HIGH_PASS',
+  AC_BAND_PASS: 'AC_BAND_PASS',
+  AC_BAND_STOP: 'AC_BAND_STOP',
+  AC_FREQUENCY_RESPONSE: 'AC_FREQUENCY_RESPONSE'
 };
 
 /**
@@ -397,6 +402,251 @@ const BUILT_IN_CIRCUITS = [
       purpose: "Converts AC utility mains or transformer output into unidirectional DC power.",
       application: "Linear power supplies, battery chargers, motor speed controllers."
     }
+  },
+
+  // 10. RC Low-Pass Filter (Phase 27)
+  {
+    circuitType: 'RC_LOW_PASS',
+    circuitId: 'RC_LOW_PASS',
+    displayName: 'RC Low-Pass Filter',
+    category: CIRCUIT_CATEGORIES.AC,
+    description: 'First-order passive RC low-pass filter passing low-frequency signals while attenuating frequencies above cutoff fc = 1 / (2πRC).',
+    requiredComponents: [
+      { role: 'resistor', type: 'resistor', minCount: 1, maxCount: 1, label: 'Series Resistor (R)' },
+      { role: 'capacitor', type: 'capacitor', minCount: 1, maxCount: 1, label: 'Shunt Capacitor (C)' }
+    ],
+    topologyRequirements: {
+      minResistors: 1,
+      minCapacitors: 1,
+      seriesShunt: true,
+      rules: [
+        'Series Resistor connected between input node and intermediate output node',
+        'Shunt Capacitor connected between intermediate output node and ground'
+      ]
+    },
+    inputRequirements: { node: 'input_node', description: 'AC excitation source' },
+    outputRequirements: { node: 'output_node', description: 'Node across shunt capacitor' },
+    expectedResponseShape: 'High gain at low frequencies, -3dB at cutoff fc, -20dB/decade roll-off at high frequencies',
+    electricalModel: 'RC_LOW_PASS_AC_MODEL',
+    requiredParameters: ['r', 'c', 'v_in'],
+    equations: {
+      transferFunction: 'H(jω) = 1 / (1 + jωRC)',
+      cutoff: 'fc = 1 / (2πRC)',
+      gainMagnitude: '|H(jω)| = 1 / √(1 + (ωRC)²)',
+      phase: '∠H(jω) = -arctan(ωRC)'
+    },
+    visualizationType: VISUALIZATION_TYPES.AC_LOW_PASS,
+    explanationTemplate: {
+      governingLaw: 'Capacitive Reactance Frequency Dependence (XC = 1 / (2πfC))',
+      formulaSummary: 'fc = 1 / (2πRC),  |H(fc)| = -3.01 dB,  ∠H(fc) = -45°',
+      purpose: 'Suppresses high-frequency noise and harmonics while preserving low-frequency information.',
+      application: 'Audio crossover subwoofers, ADC anti-aliasing pre-filters, power supply ripple smoothing.'
+    },
+    limitations: 'First-order passive filter has fixed -20 dB/decade roll-off and loading sensitivity.'
+  },
+
+  // 11. RC High-Pass Filter (Phase 27)
+  {
+    circuitType: 'RC_HIGH_PASS',
+    circuitId: 'RC_HIGH_PASS',
+    displayName: 'RC High-Pass Filter',
+    category: CIRCUIT_CATEGORIES.AC,
+    description: 'First-order passive RC high-pass filter blocking DC and low frequencies while passing frequencies above cutoff fc = 1 / (2πRC).',
+    requiredComponents: [
+      { role: 'capacitor', type: 'capacitor', minCount: 1, maxCount: 1, label: 'Series Capacitor (C)' },
+      { role: 'resistor', type: 'resistor', minCount: 1, maxCount: 1, label: 'Shunt Resistor (R)' }
+    ],
+    topologyRequirements: {
+      minResistors: 1,
+      minCapacitors: 1,
+      seriesShunt: true,
+      rules: [
+        'Series Capacitor connected between input node and intermediate output node',
+        'Shunt Resistor connected between intermediate output node and ground'
+      ]
+    },
+    inputRequirements: { node: 'input_node', description: 'AC excitation source' },
+    outputRequirements: { node: 'output_node', description: 'Node across shunt resistor' },
+    expectedResponseShape: 'Low gain at low frequencies, -3dB at cutoff fc, unity passband gain at high frequencies',
+    electricalModel: 'RC_HIGH_PASS_AC_MODEL',
+    requiredParameters: ['r', 'c', 'v_in'],
+    equations: {
+      transferFunction: 'H(jω) = jωRC / (1 + jωRC)',
+      cutoff: 'fc = 1 / (2πRC)',
+      gainMagnitude: '|H(jω)| = (ωRC) / √(1 + (ωRC)²)',
+      phase: '∠H(jω) = 90° - arctan(ωRC)'
+    },
+    visualizationType: VISUALIZATION_TYPES.AC_HIGH_PASS,
+    explanationTemplate: {
+      governingLaw: 'Capacitive Reactance Attenuation & DC Blocking',
+      formulaSummary: 'fc = 1 / (2πRC),  |H(fc)| = -3.01 dB,  ∠H(fc) = +45°',
+      purpose: 'Blocks steady-state DC bias while transmitting high-frequency AC signals.',
+      application: 'Audio amplifier AC input coupling, treble tone controls, differentiator networks.'
+    },
+    limitations: 'Passive first-order circuit exhibits insertion loss and cannot provide active voltage gain.'
+  },
+
+  // 12. RL Low-Pass Filter (Phase 27)
+  {
+    circuitType: 'RL_LOW_PASS',
+    circuitId: 'RL_LOW_PASS',
+    displayName: 'RL Low-Pass Filter',
+    category: CIRCUIT_CATEGORIES.AC,
+    description: 'First-order passive RL low-pass filter passing low-frequency signals while inductive reactance opposes high-frequency currents.',
+    requiredComponents: [
+      { role: 'inductor', type: 'inductor', minCount: 1, maxCount: 1, label: 'Series Inductor (L)' },
+      { role: 'resistor', type: 'resistor', minCount: 1, maxCount: 1, label: 'Shunt Resistor (R)' }
+    ],
+    topologyRequirements: {
+      minResistors: 1,
+      minInductors: 1,
+      seriesShunt: true,
+      rules: [
+        'Series Inductor connected between input node and intermediate output node',
+        'Shunt Resistor connected between intermediate output node and ground'
+      ]
+    },
+    inputRequirements: { node: 'input_node', description: 'AC excitation source' },
+    outputRequirements: { node: 'output_node', description: 'Node across shunt resistor' },
+    expectedResponseShape: 'Unity gain at DC/low frequencies, -3dB at fc = R / (2πL), high-frequency roll-off',
+    electricalModel: 'RL_LOW_PASS_AC_MODEL',
+    requiredParameters: ['r', 'l', 'v_in'],
+    equations: {
+      transferFunction: 'H(jω) = R / (R + jωL)',
+      cutoff: 'fc = R / (2πL)',
+      gainMagnitude: '|H(jω)| = R / √(R² + (ωL)²)',
+      phase: '∠H(jω) = -arctan(ωL / R)'
+    },
+    visualizationType: VISUALIZATION_TYPES.AC_LOW_PASS,
+    explanationTemplate: {
+      governingLaw: 'Inductive Reactance Frequency Dependence (XL = 2πfL)',
+      formulaSummary: 'fc = R / (2πL),  |H(fc)| = -3.01 dB,  ∠H(fc) = -45°',
+      purpose: 'Attenuates high-frequency noise using magnetic flux opposition.',
+      application: 'Speaker crossover woofers, RF chokes, power filtering.'
+    },
+    limitations: 'Physical inductors possess series DC winding resistance (DCR) and magnetic saturation.'
+  },
+
+  // 13. RL High-Pass Filter (Phase 27)
+  {
+    circuitType: 'RL_HIGH_PASS',
+    circuitId: 'RL_HIGH_PASS',
+    displayName: 'RL High-Pass Filter',
+    category: CIRCUIT_CATEGORIES.AC,
+    description: 'First-order passive RL high-pass filter shunting low frequencies to ground through inductive reactance while passing high frequencies.',
+    requiredComponents: [
+      { role: 'resistor', type: 'resistor', minCount: 1, maxCount: 1, label: 'Series Resistor (R)' },
+      { role: 'inductor', type: 'inductor', minCount: 1, maxCount: 1, label: 'Shunt Inductor (L)' }
+    ],
+    topologyRequirements: {
+      minResistors: 1,
+      minInductors: 1,
+      seriesShunt: true,
+      rules: [
+        'Series Resistor connected between input node and intermediate output node',
+        'Shunt Inductor connected between intermediate output node and ground'
+      ]
+    },
+    inputRequirements: { node: 'input_node', description: 'AC excitation source' },
+    outputRequirements: { node: 'output_node', description: 'Node across shunt inductor' },
+    expectedResponseShape: 'Low gain at low frequencies, -3dB at fc = R / (2πL), unity passband gain at high frequencies',
+    electricalModel: 'RL_HIGH_PASS_AC_MODEL',
+    requiredParameters: ['r', 'l', 'v_in'],
+    equations: {
+      transferFunction: 'H(jω) = jωL / (R + jωL)',
+      cutoff: 'fc = R / (2πL)',
+      gainMagnitude: '|H(jω)| = (ωL) / √(R² + (ωL)²)',
+      phase: '∠H(jω) = 90° - arctan(ωL / R)'
+    },
+    visualizationType: VISUALIZATION_TYPES.AC_HIGH_PASS,
+    explanationTemplate: {
+      governingLaw: 'Inductive Shunting & Low-Frequency Attenuation',
+      formulaSummary: 'fc = R / (2πL),  |H(fc)| = -3.01 dB,  ∠H(fc) = +45°',
+      purpose: 'Passes high-frequency signals while shunting DC and low-frequency components.',
+      application: 'High-pass audio crossovers, pulse transformers, RF discrimination.'
+    },
+    limitations: 'Bulky at low frequencies due to required large inductance values.'
+  },
+
+  // 14. RLC Band-Pass Filter (Phase 27)
+  {
+    circuitType: 'RLC_BAND_PASS',
+    circuitId: 'RLC_BAND_PASS',
+    displayName: 'RLC Band-Pass Filter',
+    category: CIRCUIT_CATEGORIES.AC,
+    description: 'Second-order resonant RLC band-pass filter transmitting frequencies in a narrow band around center frequency f0 = 1 / (2π√(LC)).',
+    requiredComponents: [
+      { role: 'inductor', type: 'inductor', minCount: 1, maxCount: 1, label: 'Resonant Inductor (L)' },
+      { role: 'capacitor', type: 'capacitor', minCount: 1, maxCount: 1, label: 'Tuning Capacitor (C)' },
+      { role: 'resistor', type: 'resistor', minCount: 1, maxCount: 1, label: 'Load / Damping Resistor (R)' }
+    ],
+    topologyRequirements: {
+      minInductors: 1,
+      minCapacitors: 1,
+      minResistors: 1,
+      seriesShunt: true,
+      rules: [
+        'Series LC branch connected between input node and output node',
+        'Shunt resistor R connected between output node and ground'
+      ]
+    },
+    inputRequirements: { node: 'input_node', description: 'AC source' },
+    outputRequirements: { node: 'output_node', description: 'Node across shunt resistor' },
+    expectedResponseShape: 'Attenuated low & high frequencies, peak gain at center frequency f0, -3dB bandwidth BW = f0 / Q',
+    electricalModel: 'RLC_BAND_PASS_AC_MODEL',
+    requiredParameters: ['r', 'l', 'c', 'v_in'],
+    equations: {
+      centerFrequency: 'f0 = 1 / (2π√(LC))',
+      qualityFactor: 'Q = (2πf0 × L) / R',
+      bandwidth: 'BW = f0 / Q = R / (2πL)'
+    },
+    visualizationType: VISUALIZATION_TYPES.AC_BAND_PASS,
+    explanationTemplate: {
+      governingLaw: 'Series LC Impedance Minimum at Resonance',
+      formulaSummary: 'f0 = 1 / (2π√(LC)),  BW = R / (2πL),  Q = f0 / BW',
+      purpose: 'Selectively passes a specific band of frequencies while rejecting all out-of-band signals.',
+      application: 'Radio receiver tuning front-ends, audio parametric equalizers, intermediate frequency bandpass.'
+    },
+    limitations: 'Bandwidth and selectivity are constrained by inductor internal resistance.'
+  },
+
+  // 15. RLC Band-Stop / Notch Filter (Phase 27)
+  {
+    circuitType: 'RLC_BAND_STOP',
+    circuitId: 'RLC_BAND_STOP',
+    displayName: 'RLC Band-Stop (Notch) Filter',
+    category: CIRCUIT_CATEGORIES.AC,
+    description: 'Second-order resonant RLC band-stop filter attenuating a narrow band of frequencies around notch frequency f0 = 1 / (2π√(LC)).',
+    requiredComponents: [
+      { role: 'resistor', type: 'resistor', minCount: 1, maxCount: 1, label: 'Series Resistor (R)' },
+      { role: 'inductor', type: 'inductor', minCount: 1, maxCount: 1, label: 'Notch Inductor (L)' },
+      { role: 'capacitor', type: 'capacitor', minCount: 1, maxCount: 1, label: 'Notch Capacitor (C)' }
+    ],
+    topologyRequirements: {
+      minInductors: 1,
+      minCapacitors: 1,
+      minResistors: 1,
+      rules: [
+        'Resistor R in series with line and parallel/series resonant LC trap shunting notch frequencies'
+      ]
+    },
+    inputRequirements: { node: 'input_node', description: 'AC source' },
+    outputRequirements: { node: 'output_node', description: 'Filtered output node' },
+    expectedResponseShape: 'Passband transmission at low and high frequencies with sharp attenuation notch at f0',
+    electricalModel: 'RLC_BAND_STOP_AC_MODEL',
+    requiredParameters: ['r', 'l', 'c', 'v_in'],
+    equations: {
+      notchFrequency: 'f0 = 1 / (2π√(LC))',
+      qualityFactor: 'Q = f0 / BW'
+    },
+    visualizationType: VISUALIZATION_TYPES.AC_BAND_STOP,
+    explanationTemplate: {
+      governingLaw: 'Resonant Trap Reactance Cancellation',
+      formulaSummary: 'f0 = 1 / (2π√(LC)),  Deep attenuation notch at f0',
+      purpose: 'Eliminates a specific unwanted interference frequency without distorting adjacent signals.',
+      application: '50/60Hz mains hum elimination in ECG biomedical monitors, anti-whistle acoustic feedback traps.'
+    },
+    limitations: 'Requires high Q components to achieve narrow notch depth without broad passband attenuation.'
   }
 ];
 

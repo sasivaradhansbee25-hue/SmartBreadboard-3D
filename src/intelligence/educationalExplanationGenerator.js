@@ -121,6 +121,66 @@ export function generateEducationalExplanation(classification, electricalBehavio
     ];
     sections.visualGuide = 'In a parallel tank, circulating reactive currents oscillate between L and C while external supply current reaches a minimum.';
     sections.whatIfAnalysis = 'Increasing parallel resistance R increases peak impedance and Quality factor Q, transforming the tank into a higher-selectivity filter.';
+  } else if (circuitType === 'RC_LOW_PASS') {
+    sections.keyComponents = [
+      { name: 'Series Resistor (R)', role: `Establishes series impedance, dropping high-frequency potential in combination with capacitor reactance.` },
+      { name: 'Shunt Capacitor (C)', role: `Reactance XC = 1/(2πfC) drops with increasing frequency, shunting high frequencies to ground.` }
+    ];
+    sections.governingEquations = [
+      { equation: 'fc (-3dB) = 1 / (2πRC)', substituted: `fc = 1 / (2π × ${p?.r?.formatted || '1 kΩ'} × ${p?.c?.formatted || '100 nF'}) = ${p?.cutoffFrequency?.formatted || '1.59 kHz'}` },
+      { equation: '|H(jω)| = 1 / √(1 + (ωRC)²)', substituted: `At f = fc: |H(fc)| = 1/√2 ≈ 0.7071 (-3.01 dB); as f → ∞, gain rolls off at -20 dB/decade` },
+      { equation: '∠H(jω) = -arctan(ωRC)', substituted: `Phase at DC is 0°, phase at cutoff fc is -45°, asymptotic phase at high frequency is -90°` }
+    ];
+    sections.visualGuide = 'At low frequencies, capacitor reactance is huge (XC >> R), allowing signal to pass to Vout without attenuation. As frequency increases, XC collapses, shunting AC energy to ground.';
+    sections.whatIfAnalysis = 'Increasing capacitance C or resistance R lowers cutoff frequency fc, attenuating lower frequency signals. Decreasing R or C raises fc into the ultrasonic band.';
+  } else if (circuitType === 'RC_HIGH_PASS') {
+    sections.keyComponents = [
+      { name: 'Series Capacitor (C)', role: `Blocks steady-state DC potential while passing high-frequency AC displacement currents.` },
+      { name: 'Shunt Resistor (R)', role: `Develops output voltage Vout = I × R relative to Ground reference.` }
+    ];
+    sections.governingEquations = [
+      { equation: 'fc (-3dB) = 1 / (2πRC)', substituted: `fc = 1 / (2π × ${p?.r?.formatted || '1 kΩ'} × ${p?.c?.formatted || '100 nF'}) = ${p?.cutoffFrequency?.formatted || '1.59 kHz'}` },
+      { equation: '|H(jω)| = (ωRC) / √(1 + (ωRC)²)', substituted: `At DC (f=0Hz): |H| = 0; at f = fc: |H(fc)| = 1/√2 (-3.01 dB); at f >> fc: |H| ≈ 1.0 (0 dB)` },
+      { equation: '∠H(jω) = 90° - arctan(ωRC)', substituted: `Phase at DC is +90° (leading), phase at fc is +45°, asymptotic passband phase is 0°` }
+    ];
+    sections.visualGuide = 'The series capacitor acts as an open circuit to DC and low frequencies. Above fc, capacitive reactance becomes negligible compared to R, enabling full passband transmission.';
+    sections.whatIfAnalysis = 'Decreasing C raises cutoff frequency fc, requiring higher frequency input signals to pass without attenuation. Lowering R increases the cutoff frequency proportionally.';
+  } else if (circuitType === 'RL_LOW_PASS') {
+    sections.keyComponents = [
+      { name: 'Series Inductor (L)', role: `Inductive reactance XL = 2πfL opposes rapid changes in current at high frequencies.` },
+      { name: 'Shunt Resistor (R)', role: `Develops output voltage across load to ground reference.` }
+    ];
+    sections.governingEquations = [
+      { equation: 'fc (-3dB) = R / (2πL)', substituted: `fc = ${p?.r?.formatted || '1 kΩ'} / (2π × ${p?.l?.formatted || '100 mH'}) = ${p?.cutoffFrequency?.formatted || '1.59 kHz'}` },
+      { equation: '|H(jω)| = R / √(R² + (ωL)²)', substituted: `At DC (f=0Hz): |H| = 1.0 (0 dB); at f = fc: |H(fc)| = 0.7071 (-3.01 dB)` },
+      { equation: '∠H(jω) = -arctan(ωL / R)', substituted: `Phase at DC is 0°, phase at fc is -45°, asymptotic high-frequency phase is -90°` }
+    ];
+    sections.visualGuide = 'At DC, the inductor behaves as a short circuit (XL ≈ 0), passing full voltage to Vout. At higher frequencies, back-EMF opposes current flow, rolling off signal transmission.';
+    sections.whatIfAnalysis = 'Increasing inductance L increases magnetic energy storage, decreasing cutoff frequency fc and filtering out lower frequencies.';
+  } else if (circuitType === 'RL_HIGH_PASS') {
+    sections.keyComponents = [
+      { name: 'Series Resistor (R)', role: `Limits current and forms an L/R voltage divider with the shunt inductor.` },
+      { name: 'Shunt Inductor (L)', role: `Shunts DC and low frequencies to ground with near-zero reactance.` }
+    ];
+    sections.governingEquations = [
+      { equation: 'fc (-3dB) = R / (2πL)', substituted: `fc = ${p?.r?.formatted || '1 kΩ'} / (2π × ${p?.l?.formatted || '100 mH'}) = ${p?.cutoffFrequency?.formatted || '1.59 kHz'}` },
+      { equation: '|H(jω)| = (ωL) / √(R² + (ωL)²)', substituted: `At DC (f=0Hz): |H| = 0; at f = fc: |H(fc)| = 0.7071 (-3.01 dB); at high f: |H| ≈ 1.0` },
+      { equation: '∠H(jω) = 90° - arctan(ωL / R)', substituted: `Phase at DC is +90°, phase at cutoff fc is +45°, phase at high frequency approaches 0°` }
+    ];
+    sections.visualGuide = 'At low frequencies, the inductor easily diverts current directly to ground. Above cutoff frequency fc, inductive reactance builds up, forcing signal to develop across Vout.';
+    sections.whatIfAnalysis = 'Decreasing inductance L raises cutoff frequency fc. Increasing R increases the cutoff frequency.';
+  } else if (circuitType === 'RLC_BAND_PASS') {
+    sections.keyComponents = [
+      { name: 'Series LC Resonant Tank', role: `Impedance collapses to zero at resonance f0 = 1/(2π√(LC)), allowing maximum current through to load.` },
+      { name: 'Load Resistor (R)', role: `Develops peak output voltage at resonance and determines bandwidth BW = R / (2πL).` }
+    ];
+    sections.governingEquations = [
+      { equation: 'f₀ = 1 / [ 2π√(LC) ]', substituted: `Center frequency f₀ = ${p?.f0?.formatted || 'N/A'}` },
+      { equation: 'BW = R / (2πL)', substituted: `Bandwidth BW = ${p?.bandwidth?.formatted || 'N/A'}` },
+      { equation: 'Q = f₀ / BW', substituted: `Quality factor Q = ${p?.qFactor?.formatted || 'N/A'}` }
+    ];
+    sections.visualGuide = 'At center frequency f₀, inductive reactance XL exactly cancels capacitive reactance XC, creating a pure low-resistance bridge from input to output.';
+    sections.whatIfAnalysis = 'Decreasing resistor R narrows the passband bandwidth BW and increases Quality factor Q, sharpening frequency selectivity.';
   }
 
   return sections;

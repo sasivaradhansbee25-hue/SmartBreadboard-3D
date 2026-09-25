@@ -858,48 +858,58 @@ def classify_circuit_endpoint(payload: Dict[str, Any]):
 
 
 # ===========================================================================
-# PHASE 26: AC CIRCUIT ANALYSIS & RESONANCE ENGINE ENDPOINT
+# PHASE 26 & 27: GENERALIZED AC CIRCUIT INTELLIGENCE & FREQUENCY RESPONSE ENDPOINT
 # ===========================================================================
 
 @app.post("/api/ac/analyze")
 def analyze_ac_circuit_endpoint(payload: Dict[str, Any]):
     """
-    Executes complex MNA frequency response analysis, frequency sweeps, and resonance detection.
+    Executes complex MNA frequency response analysis, generalized transfer response H(jw),
+    Bode magnitude/phase spectrum, cutoff frequency extraction, and deterministic behavior classification.
     Scientific Integrity: is_measured is strictly False; source is 'mna_simulation'.
     """
-    from circuit_solver.frequency_sweep import run_frequency_sweep
-    from circuit_solver.resonance import analyze_resonance
+    from circuit_solver.ac_intelligence import analyze_generalized_ac_circuit
 
     netlist = payload.get("netlist", payload)
     analysis_cfg = payload.get("analysis", {})
+    response_cfg = payload.get("response", {})
 
     start_freq = float(analysis_cfg.get("start_frequency_hz", analysis_cfg.get("startFrequency", 10.0)))
     stop_freq = float(analysis_cfg.get("stop_frequency_hz", analysis_cfg.get("stopFrequency", 100000.0)))
     points = int(analysis_cfg.get("points", 100))
     sweep_type = str(analysis_cfg.get("sweep_type", analysis_cfg.get("sweepType", "log")))
-    topology_type = str(analysis_cfg.get("topology_type", "series"))
 
-    # Run Frequency Sweep
-    sweep_res = run_frequency_sweep(
+    in_node = response_cfg.get("input_node") or response_cfg.get("inputNode")
+    out_node = response_cfg.get("output_node") or response_cfg.get("outputNode")
+
+    res = analyze_generalized_ac_circuit(
         netlist,
         start_freq_hz=start_freq,
         stop_freq_hz=stop_freq,
         num_points=points,
-        sweep_type=sweep_type
+        sweep_type=sweep_type,
+        input_node=in_node,
+        output_node=out_node
     )
 
-    if not sweep_res.get("success", False):
-        raise HTTPException(status_code=400, detail=sweep_res.get("error", "AC Frequency Sweep Failed"))
-
-    # Run Resonance Analysis
-    resonance_res = analyze_resonance(sweep_res, topology_type=topology_type)
+    if not res.get("success", False):
+        raise HTTPException(status_code=400, detail=res.get("error", "AC Frequency Sweep Failed"))
 
     return {
         "status": "success",
         "analysis_type": "AC_FREQUENCY_DOMAIN",
-        "circuit_type": "RLC_RESONANCE" if resonance_res.get("resonance_detected") else "AC_GENERAL_NETWORK",
-        "sweep": sweep_res,
-        "resonance": resonance_res,
+        "circuit_type": res.get("topology", {}).get("detected_topology", "AC_GENERAL_NETWORK"),
+        "topology": res.get("topology"),
+        "behavior": res.get("behavior"),
+        "primary_candidate": res.get("primary_candidate"),
+        "alternative_candidates": res.get("alternative_candidates"),
+        "evidence": res.get("evidence"),
+        "frequency_response": res.get("frequency_response"),
+        "shape_analysis": res.get("shape_analysis"),
+        "cutoff": res.get("cutoff"),
+        "resonance": res.get("resonance"),
+        "benchmark_comparison": res.get("benchmark_comparison"),
+        "sweep": res.get("sweep"),
         "source": "mna_simulation",
         "is_measured": False
     }
