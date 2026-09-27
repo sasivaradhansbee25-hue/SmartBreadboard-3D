@@ -510,9 +510,52 @@ export function classifyCircuitTopology(netlist, simulationResult = null) {
     }
   }
 
+  // 2b. Single Diode Forward / Reverse Bias & Half-Wave Rectifier Rules (Phase 30)
+  if (typeCounts.diode === 1 && typeCounts.resistor >= 1 && typeCounts.capacitor === 0 && typeCounts.inductor === 0 && typeCounts.led === 0) {
+    const r1 = compsByType.resistor[0];
+    const d1 = compsByType.diode[0];
+    const nR1 = getComponentNodes(r1);
+    const nD1 = getComponentNodes(d1);
+
+    const rNodes = new Set([nR1.node1, nR1.node2].filter(Boolean));
+    const dNodes = new Set([nD1.node1, nD1.node2].filter(Boolean));
+    const shared = [...rNodes].filter(n => dNodes.has(n));
+
+    if (shared.length === 1) {
+      const intermediate = shared[0];
+      const otherR = [...rNodes].find(n => n !== intermediate);
+      const otherD = [...dNodes].find(n => n !== intermediate);
+
+      // If Cathode is facing power or Anode is connected to ground => Reverse Bias
+      const isReverse = (nD1.node2 === intermediate && isPowerNode(otherR)) || (nD1.node1 === otherD && isGroundNode(otherD));
+
+      return {
+        circuitType: isReverse ? 'DIODE_REVERSE_BIAS' : 'DIODE_FORWARD_BIAS',
+        displayName: isReverse ? 'Diode Reverse-Bias Circuit' : 'Diode Forward-Bias Circuit',
+        category: 'semiconductor',
+        verificationState: VERIFICATION_STATES.VERIFIED,
+        confidence: 0.98,
+        topologyStatus: isReverse ? 'VALID_REVERSE_BIASED_DIODE' : 'VALID_FORWARD_BIASED_DIODE',
+        electricalModelStatus: 'AVAILABLE',
+        parameters: {
+          r_series: r1.id || r1.designator,
+          diode: d1.id || d1.designator,
+          node_intermediate: intermediate,
+          node_in: otherR,
+          node_out: otherD
+        },
+        matchedComponents: { r_series: r1, diode: d1 },
+        visualizationType: isReverse ? VISUALIZATION_TYPES.DIODE_REVERSE_BIAS : VISUALIZATION_TYPES.DIODE_FORWARD_CONDUCTION,
+        warnings: [],
+        missingRequirements: []
+      };
+    }
+  }
+
   // 3. RC Filter & Charging Rules
   if (typeCounts.resistor === 1 && typeCounts.capacitor === 1 && typeCounts.led === 0 && typeCounts.inductor === 0) {
     const r1 = compsByType.resistor[0];
+
     const c1 = compsByType.capacitor[0];
     const nR1 = getComponentNodes(r1);
     const nC1 = getComponentNodes(c1);

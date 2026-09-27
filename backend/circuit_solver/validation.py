@@ -19,18 +19,38 @@ def validate_circuit_netlist(components: List[Dict[str, Any]], power_sources: Li
         }, warnings
 
     if not power_sources:
-        return False, {
-            "code": "POWER_SOURCE_REQUIRED",
-            "message": "No active power source was detected in this photograph. Please add a simulated source for analysis."
-        }, warnings
+        has_reactive = any("cap" in str(c.get("type", "")).lower() or "ind" in str(c.get("type", "")).lower() for c in components)
+        if not has_reactive:
+            return False, {
+                "code": "POWER_SOURCE_REQUIRED",
+                "message": "No active power source was detected in this photograph. Please add a simulated source for analysis."
+            }, warnings
+
 
     # Validate each power source
     for ps in power_sources:
-        v_val = float(ps.get("voltage", ps.get("value", 0.0)))
         pos_n = str(ps.get("positive_node") or ps.get("node_pos") or ps.get("positiveNode") or ps.get("node1", ""))
         neg_n = str(ps.get("negative_node") or ps.get("node_neg") or ps.get("negativeNode") or ps.get("node2", ""))
 
-        if v_val <= 0:
+        stype = str(ps.get("type", "voltage_source")).lower()
+        v_candidates = [
+            ps.get("voltage"),
+            ps.get("value"),
+            ps.get("final_value"),
+            ps.get("finalValue"),
+            ps.get("initial_value"),
+            ps.get("initialValue"),
+            ps.get("v_high"),
+            ps.get("high"),
+            ps.get("amplitude"),
+            ps.get("v_ac")
+        ]
+        non_none_v = [float(v) for v in v_candidates if v is not None]
+        v_val = max(non_none_v) if non_none_v else 0.0
+
+        is_transient_or_ac_type = stype in ["step", "voltage_step", "dc_step", "pulse", "voltage_pulse", "square", "sine", "ac", "sinusoidal", "transient"]
+        has_reactive = any("cap" in str(c.get("type", "")).lower() or "ind" in str(c.get("type", "")).lower() for c in components)
+        if v_val <= 0 and not is_transient_or_ac_type and not has_reactive:
             return False, {
                 "code": "INVALID_SOURCE_VOLTAGE",
                 "message": f"Simulated voltage source must be greater than 0V (got {v_val}V)."
@@ -41,6 +61,7 @@ def validate_circuit_netlist(components: List[Dict[str, Any]], power_sources: Li
                 "code": "INVALID_SOURCE_CONNECTION",
                 "message": "Source terminals must be connected to valid circuit nodes."
             }, warnings
+
 
         if pos_n.upper() == neg_n.upper():
             return False, {

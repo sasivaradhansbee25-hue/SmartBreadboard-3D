@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { mockCircuits } from '../data/mockCircuits';
 import { demoCircuits } from '../data/demoCircuits';
 import { requestDcSimulation } from '../services/analysisService';
+import { requestTransientAnalysis } from '../services/transientAnalysisService';
 import { parseComponentValue, formatEngineeringValue } from '../utils/valueParser';
 import { analyzeCircuitIntelligence } from '../intelligence/index.js';
 
@@ -37,7 +38,19 @@ export function CircuitProvider({ children }) {
   const [solverStatus, setSolverStatus] = useState('IDLE'); // 'IDLE', 'SOLVED', 'ERROR', 'NOT_RUN', 'POWER_REQUIRED'
   const [solverError, setSolverError] = useState(null);
 
+  // Phase 29: Transient Circuit Analysis State
+  const [transientAnalysis, setTransientAnalysis] = useState(null);
+  const [transientConfig, setTransientConfig] = useState({
+    tStart: 0.0,
+    tStop: 0.01,
+    dt: 0.0001,
+    method: 'backward_euler',
+    source: null,
+    initialConditions: {}
+  });
+
   // Selection & Net Highlight State (Single Source of Truth)
+
   const [selectedComponent, setSelectedComponent] = useState(null);
   const [selectedNet, setSelectedNet] = useState(null);
   const [timeSeriesData, setTimeSeriesData] = useState([]);
@@ -597,7 +610,43 @@ export function CircuitProvider({ children }) {
     setSimulationSource(null);
     setSimulation(prev => ({ ...prev, running: false, time: 0 }));
     setTimeSeriesData([]);
+    setTransientAnalysis(null);
   };
+
+  // Phase 29: Run Transient Analysis Action
+  const runTransientAnalysis = useCallback(async (customOptions = {}) => {
+    if (!activeCircuit) return null;
+    const currentSources = [...(activeCircuit.power_sources || [])];
+    if (simulationSource) {
+      currentSources.push({
+        id: "V_SIMULATED",
+        type: simulationSource.type || "step",
+        voltage: parseFloat(simulationSource.value || 5.0),
+        positive_node: simulationSource.positiveNode,
+        negative_node: simulationSource.negativeNode,
+        source: simulationSource.source || "user_simulated"
+      });
+    }
+
+    const netlistToSolve = {
+      ...activeCircuit,
+      power_sources: currentSources
+    };
+
+    const mergedOptions = {
+      ...transientConfig,
+      ...customOptions,
+      powerSource: simulationSource
+    };
+
+    const res = await requestTransientAnalysis(netlistToSolve, mergedOptions);
+    setTransientAnalysis(res);
+    return res;
+  }, [activeCircuit, simulationSource, transientConfig]);
+
+  const clearTransientAnalysis = useCallback(() => {
+    setTransientAnalysis(null);
+  }, []);
 
   return (
     <CircuitContext.Provider value={{
@@ -653,11 +702,18 @@ export function CircuitProvider({ children }) {
       setSelectedComponent,
       timeSeriesData,
       setTimeSeriesData,
-      circuitIntelligence
+      circuitIntelligence,
+      transientAnalysis,
+      setTransientAnalysis,
+      transientConfig,
+      setTransientConfig,
+      runTransientAnalysis,
+      clearTransientAnalysis
     }}>
       {children}
     </CircuitContext.Provider>
   );
+
 }
 
 export function useCircuit() {

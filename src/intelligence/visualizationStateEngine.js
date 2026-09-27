@@ -742,11 +742,187 @@ export function generateVisualizationState(classification, electricalBehaviour, 
     };
   }
 
+  // =========================================================================
+  // 9. RL STEP & TRANSIENT VISUALIZATION (Phase 29)
+  // =========================================================================
+  if (circuitType === 'RL_CURRENT_RISE' || circuitType === 'RL_CURRENT_DECAY') {
+
+    const r = matchedComponents?.r;
+    const l = matchedComponents?.l;
+    const isRise = circuitType === 'RL_CURRENT_RISE';
+
+    if (r) {
+      compHighlights[r.id || r.designator] = {
+        role: 'SERIES_RESISTOR',
+        roleLabel: 'Current Limiter / Dissipator (R)',
+        color: '#06b6d4',
+        haloIntensity: 0.8,
+        pulseSpeed: 1.0,
+        tooltip: `R: Determines RL rate τ = L/R`
+      };
+    }
+    if (l) {
+      compHighlights[l.id || l.designator] = {
+        role: 'INDUCTOR',
+        roleLabel: 'Inductor (L)',
+        color: '#8b5cf6',
+        haloIntensity: 1.2,
+        pulseSpeed: 1.6,
+        tooltip: `L: Storing magnetic energy (1/2 L i²)`
+      };
+    }
+
+    return {
+      status: 'VERIFIED',
+      circuitType,
+      visualizationType: isRise ? 'RL_RISE_WAVEFORM' : 'RL_DECAY_WAVEFORM',
+      isEducationalAnimationActive: true,
+      componentHighlights: compHighlights,
+      currentFlow: { enabled: true, branches: [] },
+      signalFlow: { type: 'TRANSIENT', active: true },
+      transientState: {
+        mode: circuitType,
+        visState: isRise ? 'TRANSIENT_CHARGING' : 'TRANSIENT_DISCHARGING'
+      },
+      nodeVoltages,
+      waveforms: electricalBehaviour?.waveforms || [],
+      educationalAnnotations: [
+        {
+          id: 'anno-rl-1',
+          target: l?.id || 'L1',
+          title: isRise ? 'Inductive Current Rise' : 'Inductive Energy Discharge',
+          text: isRise ? 'Inductor opposes instantaneous current change via counter-EMF' : 'Stored magnetic field collapses and sustains decaying current'
+        }
+      ],
+      warningBanner: null
+    };
+  }
+
+  // =========================================================================
+  // 10. RLC TRANSIENT VISUALIZATION (Phase 29)
+  // =========================================================================
+  if (circuitType === 'RLC_TRANSIENT') {
+    const r = matchedComponents?.r;
+    const l = matchedComponents?.l;
+    const c = matchedComponents?.c;
+
+    if (r) compHighlights[r.id || r.designator] = { role: 'DAMPING_RESISTOR', roleLabel: 'Damping R', color: '#f59e0b', haloIntensity: 0.8, pulseSpeed: 1.0 };
+    if (l) compHighlights[l.id || l.designator] = { role: 'RESONANT_INDUCTOR', roleLabel: 'Inductor L', color: '#8b5cf6', haloIntensity: 1.2, pulseSpeed: 1.8 };
+    if (c) compHighlights[c.id || c.designator] = { role: 'RESONANT_CAPACITOR', roleLabel: 'Capacitor C', color: '#3b82f6', haloIntensity: 1.2, pulseSpeed: 1.8 };
+
+    return {
+      status: 'VERIFIED',
+      circuitType,
+      visualizationType: 'RLC_TRANSIENT_WAVEFORM',
+      isEducationalAnimationActive: true,
+      componentHighlights: compHighlights,
+      currentFlow: { enabled: true, branches: [] },
+      signalFlow: { type: 'TRANSIENT_OSCILLATION', active: true },
+      transientState: {
+        mode: circuitType,
+        visState: 'TRANSIENT_OSCILLATING'
+      },
+      nodeVoltages,
+      waveforms: electricalBehaviour?.waveforms || [],
+      educationalAnnotations: [
+        {
+          id: 'anno-rlc-1',
+          target: c?.id || 'C1',
+          title: '2nd-Order RLC Transient',
+          text: 'Energy sloshes between magnetic (L) and electrostatic (C) storage while dissipating in R'
+        }
+      ],
+      warningBanner: null
+    };
+  }
+
+
+  // =========================================================================
+  // 11. SEMICONDUCTOR VISUALIZATIONS (Phase 30)
+  // =========================================================================
+  if (circuitType === 'DIODE_FORWARD_BIAS' || circuitType === 'DIODE_REVERSE_BIAS') {
+    const d = matchedComponents?.diode;
+    const r = matchedComponents?.r_series;
+    const isFwd = circuitType === 'DIODE_FORWARD_BIAS';
+
+    if (d) {
+      compHighlights[d.id || d.designator] = {
+        role: isFwd ? 'FORWARD_CONDUCTING_DIODE' : 'REVERSE_BIASED_DIODE',
+        roleLabel: isFwd ? 'Diode (ON)' : 'Diode (OFF/Blocking)',
+        color: isFwd ? '#10b981' : '#ef4444',
+        haloIntensity: isFwd ? 1.0 : 0.4,
+        pulseSpeed: isFwd ? 1.5 : 0.0
+      };
+    }
+    if (r) {
+      compHighlights[r.id || r.designator] = {
+        role: 'CURRENT_LIMITING_RESISTOR',
+        roleLabel: 'Series R',
+        color: '#f59e0b',
+        haloIntensity: 0.7,
+        pulseSpeed: 1.0
+      };
+    }
+
+    return {
+      status: 'VERIFIED',
+      circuitType,
+      visualizationType: isFwd ? VISUALIZATION_TYPES.DIODE_FORWARD_CONDUCTION : VISUALIZATION_TYPES.DIODE_REVERSE_BIAS,
+      isEducationalAnimationActive: true,
+      componentHighlights: compHighlights,
+      currentFlow: { enabled: isFwd, branches: [] },
+      signalFlow: { type: isFwd ? 'DC_FORWARD_FLOW' : 'BLOCKED', active: isFwd },
+      transientState: {
+        mode: circuitType,
+        visState: isFwd ? 'DIODE_FORWARD_CONDUCTION' : 'DIODE_REVERSE_BIAS'
+      },
+      nodeVoltages,
+      waveforms: electricalBehaviour?.waveforms || [],
+      educationalAnnotations: [
+        {
+          id: 'anno-diode-1',
+          target: d?.id || 'D1',
+          title: isFwd ? 'Forward Conduction' : 'Reverse Bias Blocking',
+          text: isFwd ? 'Diode forward drop overcome; exponential current allowed to pass.' : 'Depletion layer blocks reverse current; only tiny leakage flows.'
+        }
+      ],
+      warningBanner: null
+    };
+  }
+
+  if (circuitType === 'HALF_WAVE_RECTIFIER' || circuitType === 'FULL_WAVE_BRIDGE_RECTIFIER') {
+    return {
+      status: 'VERIFIED',
+      circuitType,
+      visualizationType: VISUALIZATION_TYPES.RECTIFIER_CONDUCTION,
+      isEducationalAnimationActive: true,
+      componentHighlights: compHighlights,
+      currentFlow: { enabled: true, branches: [] },
+      signalFlow: { type: 'PULSATING_DC', active: true },
+      transientState: {
+        mode: circuitType,
+        visState: 'RECTIFIER_CONDUCTION'
+      },
+      nodeVoltages,
+      waveforms: electricalBehaviour?.waveforms || [],
+      educationalAnnotations: [
+        {
+          id: 'anno-rect-1',
+          target: 'D1',
+          title: 'AC Rectification',
+          text: 'Converts alternating AC polarity into unidirectional pulsating DC across load.'
+        }
+      ],
+      warningBanner: null
+    };
+  }
+
   // Fallback generic state
   return {
     status: 'VERIFIED',
     circuitType,
     visualizationType: VISUALIZATION_TYPES.GENERIC_DC_FLOW,
+
     isEducationalAnimationActive: true,
     componentHighlights: compHighlights,
     currentFlow: { enabled: true, branches: [] },

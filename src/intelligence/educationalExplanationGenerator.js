@@ -225,7 +225,51 @@ export function generateEducationalExplanation(classification, electricalBehavio
     ];
     sections.visualGuide = 'The output voltage tracks input voltage with 1:1 unity gain. The green feedback line illustrates 100% negative feedback stabilization.';
     sections.whatIfAnalysis = 'The follower prevents signal voltage drop when driving low-resistance loads that would otherwise collapse a passive divider.';
+  } else if (circuitType === 'DIODE_FORWARD_BIAS') {
+    sections.keyComponents = [
+      { name: 'PN Junction Diode', role: 'Enters exponential forward conduction once forward bias exceeds the built-in barrier potential.' },
+      { name: 'Series Resistor', role: 'Limits exponential forward diode current to prevent thermal runaway and establish operating point.' }
+    ];
+    sections.governingEquations = [
+      { equation: 'I_D = Is × [ exp(V_D / (n × V_T)) - 1 ]', substituted: 'Shockley non-linear equation solved iteratively via Newton-Raphson linearization.' },
+      { equation: 'V_source = I_D × R_series + V_D', substituted: 'Kirchhoff Voltage Law loop balance.' }
+    ];
+    sections.visualGuide = 'When forward voltage rises above the barrier threshold (~0.6V - 0.7V), the depletion layer shrinks, allowing carriers to cross the junction.';
+    sections.whatIfAnalysis = 'Increasing series resistance reduces diode current and moves the operating point down the exponential I-V curve.';
+  } else if (circuitType === 'DIODE_REVERSE_BIAS') {
+    sections.keyComponents = [
+      { name: 'PN Junction Diode', role: 'Widened depletion zone blocks majority carrier drift, restricting flow to reverse saturation current.' },
+      { name: 'Series Resistor', role: 'Pulls the cathode node to the applied potential under negligible leakage current.' }
+    ];
+    sections.governingEquations = [
+      { equation: 'I_D ≈ -Is', substituted: 'Reverse saturation leakage current under negative bias.' }
+    ];
+    sections.visualGuide = 'The red blocking halo indicates reverse polarity blocking current flow through the branch.';
+    sections.whatIfAnalysis = 'Unless the reverse breakdown threshold is exceeded, the branch acts as an open circuit.';
+  } else if (circuitType === 'HALF_WAVE_RECTIFIER') {
+    sections.keyComponents = [
+      { name: 'Rectifier Diode', role: 'Conducts during positive half-cycles and blocks reverse current during negative half-cycles.' },
+      { name: 'Load Resistor', role: 'Converts rectified forward current into pulsating unipolar DC output voltage.' }
+    ];
+    sections.governingEquations = [
+      { equation: 'Vout(t) = max(0, Vin(t) - V_D)', substituted: 'Half-wave output voltage waveform.' },
+      { equation: 'V_DC(avg) ≈ V_peak / π', substituted: 'Average DC output for ideal half-wave rectification.' }
+    ];
+    sections.visualGuide = 'Current pulses through the load only during the positive half of the AC cycle, creating pulsating DC.';
+    sections.whatIfAnalysis = 'Adding a parallel smoothing capacitor filters the pulsation ripple into smooth DC.';
+  } else if (circuitType === 'FULL_WAVE_BRIDGE_RECTIFIER') {
+    sections.keyComponents = [
+      { name: '4-Diode Bridge Network', role: 'Steers alternating current from both half-cycles into a unidirectional load path.' },
+      { name: 'Load Resistor', role: 'Carries unipolar rectified DC current during both positive and negative AC input phases.' }
+    ];
+    sections.governingEquations = [
+      { equation: 'Vout(t) = |Vin(t)| - 2 × V_D', substituted: 'Full-wave rectified voltage with two diode forward drops.' },
+      { equation: 'V_DC(avg) ≈ 2 × V_peak / π', substituted: 'Average DC output for ideal full-wave rectification.' }
+    ];
+    sections.visualGuide = 'Diodes conduct in diagonal pairs (D1+D4 on positive half-cycle, D2+D3 on negative half-cycle), routing current continuously downward through the load.';
+    sections.whatIfAnalysis = 'Full-wave rectification doubles ripple frequency (100 Hz / 120 Hz) compared to half-wave, greatly improving filtering efficiency.';
   }
+
 
   return sections;
 }

@@ -960,5 +960,78 @@ def analyze_ac_circuit_endpoint(payload: Dict[str, Any]):
     }
 
 
+# ===========================================================================
+# PHASE 29 & 30: TRANSIENT CIRCUIT INTELLIGENCE & NON-LINEAR SEMICONDUCTOR SIMULATION
+# ===========================================================================
 
+@app.post("/api/transient/analyze")
+@app.post("/api/nonlinear/transient/analyze")
+def analyze_transient_circuit_endpoint(payload: Dict[str, Any]):
+    """
+    Executes Transient MNA time-domain numerical integration (Backward Euler / Trapezoidal)
+    and Non-Linear Semiconductor Newton-Raphson simulation for diodes/LEDs/rectifiers.
+    
+    Scientific Integrity:
+    - source: "nonlinear_transient_mna_simulation" / "transient_mna_simulation"
+    - is_measured: False
+    - physical_validation_status: "NOT_PERFORMED"
+    """
+    from circuit_solver.transient_behavior import analyze_transient_circuit
+    from circuit_solver.semiconductor_behavior import analyze_semiconductor_circuit
+    from circuit_solver.bjt_behavior import analyze_bjt_circuit
+
+    netlist = payload.get("netlist", payload)
+    source_cfg = payload.get("source") or payload.get("source_config") or payload.get("power_source")
+    sim_cfg = payload.get("simulation") or payload.get("simulation_config") or {}
+    init_conds = payload.get("initialConditions") or payload.get("initial_conditions") or {}
+    nonlin_cfg = payload.get("nonlinear") or payload.get("nonlinear_config")
+
+    comps = netlist.get("components", []) if isinstance(netlist, dict) else []
+    has_bjt = any(
+        c.get("type", "").lower() in ["bjt", "transistor", "npn", "pnp"]
+        for c in comps if isinstance(c, dict)
+    )
+    has_diode = any(
+        c.get("type", "").lower() in ["diode", "led", "rectifier", "diode_rectifier"]
+        for c in comps if isinstance(c, dict)
+    )
+
+    if has_bjt:
+        res = analyze_bjt_circuit(
+            netlist=netlist,
+            source_config=source_cfg,
+            simulation_config=sim_cfg,
+            initial_conditions=init_conds,
+            nonlinear_config=nonlin_cfg
+        )
+    elif has_diode or nonlin_cfg is not None:
+        res = analyze_semiconductor_circuit(
+            netlist=netlist,
+            source_config=source_cfg,
+            simulation_config=sim_cfg,
+            initial_conditions=init_conds,
+            nonlinear_config=nonlin_cfg
+        )
+    else:
+        res = analyze_transient_circuit(
+            netlist=netlist,
+            source_config=source_cfg,
+            simulation_config=sim_cfg,
+            initial_conditions=init_conds
+        )
+
+
+    if res.get("status") == "ERROR":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": res.get("error_code", "TRANSIENT_SIMULATION_ERROR"),
+                "message": res.get("message", "Transient simulation failed"),
+                "source": res.get("source", "nonlinear_transient_mna_simulation"),
+                "is_measured": False,
+                "physical_validation_status": "NOT_PERFORMED"
+            }
+        )
+
+    return res
 

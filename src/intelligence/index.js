@@ -20,6 +20,12 @@ import { classifyCircuitTopology } from './topologyClassifier.js';
 import { calculateCircuitBehaviour } from './electricalBehaviourModel.js';
 import { generateVisualizationState } from './visualizationStateEngine.js';
 import { generateEducationalExplanation } from './educationalExplanationGenerator.js';
+import {
+  normalizeTransientResponse,
+  extractClientTransientMetrics,
+  TRANSIENT_CIRCUIT_TYPES,
+  DAMPING_TYPES
+} from './transientAnalysisEngine.js';
 
 export {
   circuitRegistry,
@@ -29,8 +35,13 @@ export {
   classifyCircuitTopology,
   calculateCircuitBehaviour,
   generateVisualizationState,
-  generateEducationalExplanation
+  generateEducationalExplanation,
+  normalizeTransientResponse,
+  extractClientTransientMetrics,
+  TRANSIENT_CIRCUIT_TYPES,
+  DAMPING_TYPES
 };
+
 
 /**
  * Main Master Analysis Function.

@@ -48,8 +48,17 @@ export const VISUALIZATION_TYPES = {
   OPAMP_AMPLIFIER: 'OPAMP_AMPLIFIER',
   OPAMP_INVERTING: 'OPAMP_INVERTING',
   OPAMP_FOLLOWER: 'OPAMP_FOLLOWER',
-  ACTIVE_FILTER: 'ACTIVE_FILTER'
+  ACTIVE_FILTER: 'ACTIVE_FILTER',
+  DIODE_FORWARD_CONDUCTION: 'DIODE_FORWARD_CONDUCTION',
+  DIODE_REVERSE_BIAS: 'DIODE_REVERSE_BIAS',
+  DIODE_OFF: 'DIODE_OFF',
+  LED_CONDUCTION: 'LED_CONDUCTION',
+  RECTIFIER_CONDUCTION: 'RECTIFIER_CONDUCTION',
+  RECTIFIER_BLOCKING: 'RECTIFIER_BLOCKING',
+  NONLINEAR_ANALYSIS: 'NONLINEAR_ANALYSIS',
+  NONLINEAR_ERROR: 'NONLINEAR_ERROR'
 };
+
 
 /**
  * Built-in Circuit Knowledge Registry definitions.
@@ -798,8 +807,74 @@ const BUILT_IN_CIRCUITS = [
     visualizationType: VISUALIZATION_TYPES.ACTIVE_FILTER,
     explanationTemplate: { governingLaw: 'Second-Order VCVS Active Sallen-Key Topology', formulaSummary: 'Architecture Placeholder' },
     limitations: 'Unsupported in Phase 28 release.'
+  },
+  {
+    circuitType: 'DIODE_FORWARD_BIAS',
+    circuitId: 'DIODE_FORWARD_BIAS',
+    displayName: 'Diode Forward-Bias Circuit',
+    category: CIRCUIT_CATEGORIES.SEMICONDUCTOR,
+    description: 'Non-linear semiconductor forward-conduction circuit governed by Shockley equation.',
+    requiredComponents: [{ role: 'diode', type: 'diode' }, { role: 'resistor', type: 'resistor' }],
+    topologyRequirements: { minDiodes: 1, minResistors: 1 },
+    electricalModel: 'SHOCKLEY_EXPONENTIAL',
+    visualizationType: VISUALIZATION_TYPES.DIODE_FORWARD_CONDUCTION,
+    explanationTemplate: { governingLaw: 'Shockley Diode Equation', formulaSummary: 'I_D = Is * [ exp(V_D / (n*V_T)) - 1 ]' },
+    limitations: 'Numerical simulation results only. Physical validation not performed.'
+  },
+  {
+    circuitType: 'DIODE_REVERSE_BIAS',
+    circuitId: 'DIODE_REVERSE_BIAS',
+    displayName: 'Diode Reverse-Bias Circuit',
+    category: CIRCUIT_CATEGORIES.SEMICONDUCTOR,
+    description: 'Reverse-biased semiconductor diode blocking current flow with minimal saturation leakage.',
+    requiredComponents: [{ role: 'diode', type: 'diode' }, { role: 'resistor', type: 'resistor' }],
+    topologyRequirements: { minDiodes: 1, minResistors: 1 },
+    electricalModel: 'SHOCKLEY_EXPONENTIAL',
+    visualizationType: VISUALIZATION_TYPES.DIODE_REVERSE_BIAS,
+    explanationTemplate: { governingLaw: 'Depletion Layer Blocking & Saturation Current', formulaSummary: 'I_D ~ -Is' },
+    limitations: 'Breakdown modeling unsupported unless explicit breakdown parameters provided.'
+  },
+  {
+    circuitType: 'HALF_WAVE_RECTIFIER',
+    circuitId: 'HALF_WAVE_RECTIFIER',
+    displayName: 'Half-Wave Diode Rectifier',
+    category: CIRCUIT_CATEGORIES.POWER_ELECTRONICS,
+    description: 'Single-diode AC-to-DC half-wave rectifier with resistive load.',
+    requiredComponents: [{ role: 'diode', type: 'diode' }, { role: 'resistor', type: 'resistor' }],
+    topologyRequirements: { minDiodes: 1, minResistors: 1, requiresAcSource: true },
+    electricalModel: 'NONLINEAR_RECTIFICATION',
+    visualizationType: VISUALIZATION_TYPES.RECTIFIER_CONDUCTION,
+    explanationTemplate: { governingLaw: 'Unidirectional Conduction & Half-Wave Rectification', formulaSummary: 'V_out(t) = max(0, V_in(t) - V_D)' },
+    limitations: 'Numerical simulation results only. Physical validation not performed.'
+  },
+  {
+    circuitType: 'FULL_WAVE_BRIDGE_RECTIFIER',
+    circuitId: 'FULL_WAVE_BRIDGE_RECTIFIER',
+    displayName: 'Full-Wave Bridge Rectifier',
+    category: CIRCUIT_CATEGORIES.POWER_ELECTRONICS,
+    description: 'Four-diode bridge network converting AC excitation into unipolar pulsating DC.',
+    requiredComponents: [{ role: 'diode', type: 'diode', count: 4 }, { role: 'resistor', type: 'resistor' }],
+    topologyRequirements: { minDiodes: 4, minResistors: 1, requiresAcSource: true },
+    electricalModel: 'BRIDGE_RECTIFICATION',
+    visualizationType: VISUALIZATION_TYPES.RECTIFIER_CONDUCTION,
+    explanationTemplate: { governingLaw: 'Full-Wave Bridge Rectification', formulaSummary: 'V_out(t) = |V_in(t)| - 2*V_D' },
+    limitations: 'Requires verified 4-diode bridge geometry.'
+  },
+  {
+    circuitType: 'LED_CURRENT_LIMITER',
+    circuitId: 'LED_CURRENT_LIMITER',
+    displayName: 'LED Current-Limiter Circuit',
+    category: CIRCUIT_CATEGORIES.SEMICONDUCTOR,
+    description: 'Series resistor and light-emitting diode with forward drop and current regulation.',
+    requiredComponents: [{ role: 'led', type: 'led' }, { role: 'resistor', type: 'resistor' }],
+    topologyRequirements: { minLeds: 1, minResistors: 1 },
+    electricalModel: 'LED_OPTOELECTRONIC',
+    visualizationType: VISUALIZATION_TYPES.LED_CONDUCTION,
+    explanationTemplate: { governingLaw: 'LED Current Regulation', formulaSummary: 'I_LED = (V_in - V_f) / R_limit' },
+    limitations: 'Optical brightness is an educational visual state, not a physical photometric measurement.'
   }
 ];
+
 
 /**
  * Singleton Registry Class for Dynamic Runtime Extension

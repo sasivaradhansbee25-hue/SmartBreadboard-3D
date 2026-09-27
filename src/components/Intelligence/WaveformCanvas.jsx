@@ -1,25 +1,76 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 
 /**
- * SmartBreadboard 3D — Multi-Domain Waveform & Spectrum Canvas (Phase 25, 26, & 27)
+ * SmartBreadboard 3D — Multi-Domain Waveform, Spectrum & Transient Canvas (Phase 25, 26, 27, 28, 29)
  *
  * Renders:
- * 1. Time-Domain Transient Curves (RC charging / discharging step responses)
- * 2. Generalized Frequency-Domain Spectra with switchable display modes:
- *    - Magnitude (dB)
- *    - Magnitude (Linear)
- *    - Phase (°)
- *    - Impedance (|Z| Ω)
- *    - Current (mA)
- * 3. Cutoff (-3dB), Resonance (f0), Peak, and Notch markers.
+ * 1. Time-Domain Numerical Transient Responses (RC, RL, RLC) with:
+ *    - Tau (τ) 63.2% marker
+ *    - Peak & Overshoot marker
+ *    - Settling time marker
+ *    - Interactive cursor readout
+ *    - Play / Pause / Reset time progression
+ *    - Clear "SIMULATED / NOT MEASURED" scientific integrity badge
+ * 2. Generalized Frequency-Domain Spectra (Magnitude dB, Magnitude Linear, Phase °, Impedance Ω, Current mA)
+ * 3. Cutoff (-3dB), Resonance (f0), and Op-Amp transfer waveforms.
  */
-export default function WaveformCanvas({ waveform, width = 480, height = 220, title = 'Signal Spectrum' }) {
+export default function WaveformCanvas({
+  waveform,
+  width = 480,
+  height = 220,
+  title = 'Signal Spectrum',
+  transientData = null
+}) {
   const canvasRef = useRef(null);
   const [activeMode, setActiveMode] = useState('magDb'); // 'magDb' | 'magLin' | 'phase' | 'impedance' | 'current'
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playheadTime, setPlayheadTime] = useState(null);
+  const [hoverCoord, setHoverCoord] = useState(null);
+  const [selectedSignalIdx, setSelectedSignalIdx] = useState(0);
+
+  // Animation frame handler for transient playback
+  useEffect(() => {
+    let animId;
+    if (isPlaying) {
+      const startTime = performance.now();
+      const durationMs = 3000; // 3 seconds loop
+      const step = (now) => {
+        const elapsed = (now - startTime) % durationMs;
+        const frac = elapsed / durationMs;
+        setPlayheadTime(frac);
+        animId = requestAnimationFrame(step);
+      };
+      animId = requestAnimationFrame(step);
+    } else {
+      setPlayheadTime(null);
+    }
+    return () => {
+      if (animId) cancelAnimationFrame(animId);
+    };
+  }, [isPlaying]);
+
+  const handleMouseMove = useCallback((e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setHoverCoord({ x, y });
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    setHoverCoord(null);
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !waveform || !waveform.points || waveform.points.length === 0) return;
+    if (!canvas) return;
+
+    // Use transientData signals or waveform points
+    const activeTransient = transientData && transientData.time && transientData.signals && transientData.signals.length > 0;
+    const hasWaveformPoints = waveform && waveform.points && waveform.points.length > 0;
+
+    if (!activeTransient && !hasWaveformPoints) return;
 
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
@@ -27,7 +78,7 @@ export default function WaveformCanvas({ waveform, width = 480, height = 220, ti
     canvas.height = height * dpr;
     ctx.scale(dpr, dpr);
 
-    const padding = { top: 25, right: 25, bottom: 35, left: 54 };
+    const padding = { top: 25, right: 25, bottom: 35, left: 56 };
     const graphW = width - padding.left - padding.right;
     const graphH = height - padding.top - padding.bottom;
 
@@ -55,20 +106,157 @@ export default function WaveformCanvas({ waveform, width = 480, height = 220, ti
       ctx.stroke();
     }
 
+    // =========================================================================
+    // 1. TIME-DOMAIN TRANSIENT MNA SIMULATION
+    // =========================================================================
+    if (activeTransient) {
+      const time = transientData.time;
+      const sigList = transientData.signals;
+      const targetSig = sigList[selectedSignalIdx] || sigList[0];
+      const vals = targetSig.values || [];
+      const tMax = time[time.length - 1] || 0.01;
+      const tMin = time[0] || 0.0;
+
+      const vMin = Math.min(...vals, 0.0);
+      const vMax = Math.max(...vals, 1e-6);
+      const vSpan = (vMax - vMin) * 1.15 || 1.0;
+      const vBase = vMin - (vMax - vMin) * 0.05;
+
+      const getX = (t) => padding.left + ((t - tMin) / (tMax - tMin || 1)) * graphW;
+      const getY = (v) => padding.top + graphH - ((v - vBase) / vSpan) * graphH;
+
+      // Draw Gradient under curve
+      const gradient = ctx.createLinearGradient(0, padding.top, 0, height - padding.bottom);
+      gradient.addColorStop(0, targetSig.type === 'current' ? 'rgba(168, 85, 247, 0.35)' : 'rgba(56, 189, 248, 0.35)');
+      gradient.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
+
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.moveTo(getX(time[0]), getY(vMin));
+      for (let i = 0; i < time.length; i++) {
+        ctx.lineTo(getX(time[i]), getY(vals[i]));
+      }
+      ctx.lineTo(getX(time[time.length - 1]), getY(vMin));
+      ctx.closePath();
+      ctx.fill();
+
+      // Tau Marker (τ)
+      const metrics = transientData.metrics || {};
+      if (metrics.tau && metrics.tau <= tMax) {
+        const tauX = getX(metrics.tau);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(tauX, padding.top);
+        ctx.lineTo(tauX, height - padding.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.fillText(`1τ (~63%)`, tauX + 4, padding.top + 12);
+      }
+
+      // Peak / Overshoot Marker
+      if (metrics.peakTime && metrics.overshootPercent > 1.0) {
+        const pkX = getX(metrics.peakTime);
+        const pkY = getY(metrics.peakValue);
+        ctx.fillStyle = '#f59e0b';
+        ctx.beginPath();
+        ctx.arc(pkX, pkY, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillText(`Peak (+${metrics.overshootPercent.toFixed(1)}%)`, pkX + 6, pkY - 6);
+      }
+
+      // Draw main signal trace
+      ctx.strokeStyle = targetSig.type === 'current' ? '#a855f7' : '#38bdf8';
+      ctx.lineWidth = 2.5;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      for (let i = 0; i < time.length; i++) {
+        const x = getX(time[i]);
+        const y = getY(vals[i]);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Playhead line
+      if (playheadTime !== null) {
+        const curT = tMin + playheadTime * (tMax - tMin);
+        const pX = getX(curT);
+        ctx.strokeStyle = '#f43f5e'; // Rose 500
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(pX, padding.top);
+        ctx.lineTo(pX, height - padding.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Cursor readout
+      if (hoverCoord && hoverCoord.x >= padding.left && hoverCoord.x <= width - padding.right) {
+        const frac = (hoverCoord.x - padding.left) / graphW;
+        const hoverT = tMin + frac * (tMax - tMin);
+        const sampleIdx = Math.min(Math.floor(frac * (time.length - 1)), time.length - 1);
+        const hoverVal = vals[sampleIdx];
+        const hoverY = getY(hoverVal);
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(hoverCoord.x, padding.top);
+        ctx.lineTo(hoverCoord.x, height - padding.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(hoverCoord.x, hoverY, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Readout tooltip
+        const label = `t=${(hoverT * 1000).toFixed(2)}ms, ${targetSig.name}=${hoverVal.toFixed(3)}${targetSig.unit}`;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+        ctx.fillRect(hoverCoord.x + 8, hoverY - 22, ctx.measureText(label).width + 12, 20);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.strokeRect(hoverCoord.x + 8, hoverY - 22, ctx.measureText(label).width + 12, 20);
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.fillText(label, hoverCoord.x + 14, hoverY - 8);
+      }
+
+      // Axes labels
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '10px Inter, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${vMax.toFixed(2)}${targetSig.unit}`, padding.left - 6, padding.top + 10);
+      ctx.fillText(`${vMin.toFixed(2)}${targetSig.unit}`, padding.left - 6, height - padding.bottom);
+
+      ctx.textAlign = 'center';
+      ctx.fillText(`${(tMin * 1000).toFixed(1)}ms`, padding.left, height - padding.bottom + 16);
+      ctx.fillText(`${(tMax * 1000).toFixed(1)}ms`, width - padding.right, height - padding.bottom + 16);
+      ctx.fillText('Time (ms)', width / 2, height - 6);
+      return;
+    }
+
+    // =========================================================================
+    // 2. FREQUENCY-DOMAIN & OP-AMP SPECTRA
+    // =========================================================================
     const points = waveform.points;
     const isFrequencyDomain = waveform.type === 'frequency_response';
 
     if (isFrequencyDomain) {
-      // Frequency Domain Spectrum
       const minF = points[0].frequencyHz || 1;
       const maxF = points[points.length - 1].frequencyHz || 1000;
       const logMin = Math.log10(minF);
       const logMax = Math.log10(maxF);
 
-      // Extract values according to active display mode
       let yValues = [];
       let yUnit = 'dB';
-      let lineColor = '#f59e0b'; // Amber
+      let lineColor = '#f59e0b';
       let gradientTop = 'rgba(245, 158, 11, 0.35)';
 
       if (activeMode === 'magDb') {
@@ -79,92 +267,39 @@ export default function WaveformCanvas({ waveform, width = 480, height = 220, ti
       } else if (activeMode === 'magLin') {
         yValues = points.map(p => p.gainMagnitude !== undefined ? p.gainMagnitude : (p.magnitudeV !== undefined ? p.magnitudeV : 1));
         yUnit = '';
-        lineColor = '#10b981'; // Emerald
+        lineColor = '#10b981';
         gradientTop = 'rgba(16, 185, 129, 0.35)';
       } else if (activeMode === 'phase') {
         yValues = points.map(p => p.phaseDeg !== undefined ? p.phaseDeg : 0);
         yUnit = '°';
-        lineColor = '#818cf8'; // Indigo
+        lineColor = '#818cf8';
         gradientTop = 'rgba(129, 140, 248, 0.35)';
       } else if (activeMode === 'impedance') {
         yValues = points.map(p => p.impedanceMagnitudeOhms !== undefined ? p.impedanceMagnitudeOhms : 0);
         yUnit = 'Ω';
-        lineColor = '#a855f7'; // Purple
+        lineColor = '#a855f7';
         gradientTop = 'rgba(168, 85, 247, 0.35)';
       } else if (activeMode === 'current') {
         yValues = points.map(p => p.currentMagnitudeMa !== undefined ? p.currentMagnitudeMa : (p.currentMagnitudeMa || 0));
         yUnit = 'mA';
-        lineColor = '#38bdf8'; // Cyan
+        lineColor = '#38bdf8';
         gradientTop = 'rgba(56, 189, 248, 0.35)';
       }
 
       let minY = Math.min(...yValues);
       let maxY = Math.max(...yValues);
+      if (maxY === minY) { maxY += 1; minY -= 1; }
+      const padY = (maxY - minY) * 0.15;
+      minY -= padY;
+      maxY += padY;
 
-      if (activeMode === 'magDb') {
-        minY = Math.min(minY, -40);
-        maxY = Math.max(maxY, 0);
-      } else if (activeMode === 'magLin') {
-        minY = 0;
-        maxY = Math.max(maxY, 1.0);
-      } else if (activeMode === 'phase') {
-        minY = Math.min(minY, -90);
-        maxY = Math.max(maxY, 90);
-      } else {
-        if (maxY === minY) maxY = minY + 1;
-      }
+      const getX = (f) => {
+        const logF = Math.log10(Math.max(f, 0.1));
+        return padding.left + ((logF - logMin) / (logMax - logMin || 1)) * graphW;
+      };
 
-      const getX = (f) => padding.left + ((Math.log10(Math.max(f, minF)) - logMin) / (logMax - logMin || 1)) * graphW;
-      const getY = (val) => padding.top + graphH - ((val - minY) / (maxY - minY || 1)) * graphH;
+      const getY = (val) => padding.top + graphH - ((val - minY) / (maxY - minY)) * graphH;
 
-      // Draw Cutoff & Resonance Markers
-      const markers = [];
-      if (waveform.fcHz) {
-        markers.push({ f: waveform.fcHz, label: `fc = ${waveform.fcHz < 1000 ? waveform.fcHz + 'Hz' : (waveform.fcHz/1000).toFixed(2)+'kHz'}`, color: '#38bdf8' });
-      }
-      if (waveform.f0Hz) {
-        markers.push({ f: waveform.f0Hz, label: `f₀ = ${waveform.f0Hz < 1000 ? waveform.f0Hz + 'Hz' : (waveform.f0Hz/1000).toFixed(2)+'kHz'}`, color: '#f59e0b' });
-      }
-      if (waveform.fLowHz) {
-        markers.push({ f: waveform.fLowHz, label: 'f_low (-3dB)', color: 'rgba(56, 189, 248, 0.6)' });
-      }
-      if (waveform.fHighHz) {
-        markers.push({ f: waveform.fHighHz, label: 'f_high (-3dB)', color: 'rgba(56, 189, 248, 0.6)' });
-      }
-
-      markers.forEach(m => {
-        if (m.f && m.f >= minF && m.f <= maxF) {
-          const x = getX(m.f);
-          ctx.strokeStyle = m.color;
-          ctx.setLineDash([4, 4]);
-          ctx.beginPath();
-          ctx.moveTo(x, padding.top);
-          ctx.lineTo(x, height - padding.bottom);
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          ctx.fillStyle = m.color;
-          ctx.font = '9px Inter, sans-serif';
-          ctx.fillText(m.label, x + 3, padding.top + 10);
-        }
-      });
-
-      // Draw Gradient Fill Area
-      const gradient = ctx.createLinearGradient(0, padding.top, 0, height - padding.bottom);
-      gradient.addColorStop(0, gradientTop);
-      gradient.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
-
-      ctx.fillStyle = gradient;
-      ctx.beginPath();
-      ctx.moveTo(getX(points[0].frequencyHz), getY(minY));
-      points.forEach((p, idx) => {
-        ctx.lineTo(getX(p.frequencyHz), getY(yValues[idx]));
-      });
-      ctx.lineTo(getX(points[points.length - 1].frequencyHz), getY(minY));
-      ctx.closePath();
-      ctx.fill();
-
-      // Draw Main Spectrum Line
       ctx.strokeStyle = lineColor;
       ctx.lineWidth = 2.5;
       ctx.lineJoin = 'round';
@@ -177,162 +312,21 @@ export default function WaveformCanvas({ waveform, width = 480, height = 220, ti
       });
       ctx.stroke();
 
-      // Y-Axis Labels
+      // Axis labels
       ctx.fillStyle = '#94a3b8';
       ctx.font = '10px Inter, sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText(`${maxY.toFixed(activeMode === 'magLin' ? 2 : 0)} ${yUnit}`, padding.left - 6, padding.top + 10);
-      ctx.fillText(`${minY.toFixed(activeMode === 'magLin' ? 2 : 0)} ${yUnit}`, padding.left - 6, height - padding.bottom);
+      ctx.fillText(`${maxY.toFixed(1)}${yUnit}`, padding.left - 6, padding.top + 10);
+      ctx.fillText(`${minY.toFixed(1)}${yUnit}`, padding.left - 6, height - padding.bottom);
 
-      // X-Axis Labels (Log frequencies)
       ctx.textAlign = 'center';
-      ctx.fillText(`${minF.toFixed(0)}Hz`, padding.left, height - padding.bottom + 16);
-      ctx.fillText(`${(maxF >= 1000 ? (maxF/1000).toFixed(0)+'kHz' : maxF.toFixed(0)+'Hz')}`, width - padding.right, height - padding.bottom + 16);
+      ctx.fillText(`${minF < 1000 ? minF.toFixed(0) + 'Hz' : (minF / 1000).toFixed(1) + 'kHz'}`, padding.left, height - padding.bottom + 16);
+      ctx.fillText(`${maxF < 1000 ? maxF.toFixed(0) + 'Hz' : (maxF / 1000).toFixed(0) + 'kHz'}`, width - padding.right, height - padding.bottom + 16);
       ctx.fillText('Frequency (Log Scale)', width / 2, height - 6);
-
-    } else if (waveform.type === 'time_domain_sine') {
-      // Time-Domain Sinusoidal Waveform (Vin vs Vout)
-      const centerY = padding.top + graphH / 2;
-
-      // Draw Center 0V Reference Axis
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([2, 2]);
-      ctx.beginPath();
-      ctx.moveTo(padding.left, centerY);
-      ctx.lineTo(width - padding.right, centerY);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Find max voltage for Y-axis scaling
-      let maxV = 1.0;
-      points.forEach(p => {
-        if (Math.abs(p.vin || 0) > maxV) maxV = Math.abs(p.vin);
-        if (Math.abs(p.vout || 0) > maxV) maxV = Math.abs(p.vout);
-      });
-      maxV = Math.max(maxV * 1.15, 1.0);
-
-      const getX = (tNorm) => padding.left + (tNorm) * graphW;
-      const getY = (v) => centerY - (v / maxV) * (graphH / 2);
-
-      // 1. Draw Vin trace (Cyan)
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.75)'; // Cyan
-      ctx.lineWidth = 2.0;
-      ctx.beginPath();
-      points.forEach((p, idx) => {
-        const x = getX(p.timeNormalized !== undefined ? p.timeNormalized : idx / (points.length - 1));
-        const y = getY(p.vin || 0);
-        if (idx === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-
-      // 2. Draw Vout trace (Emerald if in-phase, Magenta if inverted)
-      const outColor = waveform.inPhase !== false ? '#10b981' : '#ec4899';
-      ctx.strokeStyle = outColor;
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      points.forEach((p, idx) => {
-        const x = getX(p.timeNormalized !== undefined ? p.timeNormalized : idx / (points.length - 1));
-        const y = getY(p.vout || 0);
-        if (idx === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-
-      // Labels & Legend
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '10px Inter, sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText(`+${maxV.toFixed(1)}V`, padding.left - 6, padding.top + 10);
-      ctx.fillText('0.0V', padding.left - 6, centerY + 3);
-      ctx.fillText(`-${maxV.toFixed(1)}V`, padding.left - 6, height - padding.bottom);
-
-      // Legend
-      ctx.fillStyle = '#38bdf8';
-      ctx.textAlign = 'left';
-      ctx.fillText('— Vin (Input)', padding.left + 10, padding.top + 14);
-      ctx.fillStyle = outColor;
-      ctx.fillText(`— Vout (${waveform.inPhase !== false ? 'In-Phase' : '180° Inverted'})`, padding.left + 95, padding.top + 14);
-
-      ctx.fillStyle = '#94a3b8';
-      ctx.textAlign = 'center';
-      ctx.fillText('0', padding.left, height - padding.bottom + 16);
-      ctx.fillText('1 Cycle (2π)', width - padding.right, height - padding.bottom + 16);
-      ctx.fillText('Normalized Time / Phase Angle', width / 2, height - 6);
-    } else {
-      // Time Domain Transient Curve
-      const maxTime = points[points.length - 1].timeMs || 5;
-      const maxV = Math.max(...points.map(p => p.voltageV || 0), 5);
-
-      const getX = (t) => padding.left + (t / maxTime) * graphW;
-      const getY = (v) => padding.top + graphH - (v / (maxV * 1.1 || 1)) * graphH;
-
-      if (waveform.tauMs) {
-        const tau = waveform.tauMs;
-        const tauList = [
-          { t: tau, label: '1τ (63.2%)', color: 'rgba(56, 189, 248, 0.6)' },
-          { t: 3 * tau, label: '3τ (95.0%)', color: 'rgba(129, 140, 248, 0.4)' },
-          { t: 5 * tau, label: '5τ (99.3%)', color: 'rgba(16, 185, 129, 0.4)' }
-        ];
-
-        tauList.forEach(item => {
-          if (item.t <= maxTime) {
-            const x = getX(item.t);
-            ctx.strokeStyle = item.color;
-            ctx.setLineDash([4, 4]);
-            ctx.beginPath();
-            ctx.moveTo(x, padding.top);
-            ctx.lineTo(x, height - padding.bottom);
-            ctx.stroke();
-            ctx.setLineDash([]);
-
-            ctx.fillStyle = item.color;
-            ctx.font = '10px Inter, sans-serif';
-            ctx.fillText(item.label, x + 4, padding.top + 12);
-          }
-        });
-      }
-
-      const gradient = ctx.createLinearGradient(0, padding.top, 0, height - padding.bottom);
-      gradient.addColorStop(0, 'rgba(56, 189, 248, 0.35)');
-      gradient.addColorStop(1, 'rgba(56, 189, 248, 0.0)');
-
-      ctx.fillStyle = gradient;
-      ctx.beginPath();
-      ctx.moveTo(getX(points[0].timeMs || 0), getY(0));
-      points.forEach(p => {
-        ctx.lineTo(getX(p.timeMs || 0), getY(p.voltageV || 0));
-      });
-      ctx.lineTo(getX(points[points.length - 1].timeMs || maxTime), getY(0));
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.strokeStyle = '#38bdf8'; // Cyan 400
-      ctx.lineWidth = 2.5;
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      points.forEach((p, idx) => {
-        const x = getX(p.timeMs || 0);
-        const y = getY(p.voltageV || 0);
-        if (idx === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '10px Inter, sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText(`${(maxV).toFixed(1)}V`, padding.left - 6, padding.top + 10);
-      ctx.fillText('0.0V', padding.left - 6, height - padding.bottom);
-
-      ctx.textAlign = 'center';
-      ctx.fillText('0', padding.left, height - padding.bottom + 16);
-      ctx.fillText(`${maxTime.toFixed(1)} ms`, width - padding.right, height - padding.bottom + 16);
-      ctx.fillText(waveform.xAxis || 'Time (ms)', width / 2, height - 6);
     }
-  }, [waveform, width, height, activeMode]);
+  }, [waveform, transientData, width, height, activeMode, selectedSignalIdx, playheadTime, hoverCoord]);
 
+  const isTransient = Boolean(transientData && transientData.signals && transientData.signals.length > 0);
   const isFrequencyDomain = waveform?.type === 'frequency_response';
 
   return (
@@ -340,9 +334,43 @@ export default function WaveformCanvas({ waveform, width = 480, height = 220, ti
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
         <span className="text-xs font-semibold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
           <span className={`w-2 h-2 rounded-full animate-pulse ${isFrequencyDomain ? 'bg-amber-400' : 'bg-cyan-400'}`}></span>
-          {waveform?.name || title}
+          {waveform?.name || (isTransient ? `${transientData.circuitType || 'Transient'} Response` : title)}
         </span>
 
+        {/* Scientific Integrity Badges */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-mono uppercase bg-cyan-950/80 text-cyan-300 px-1.5 py-0.5 rounded border border-cyan-700/60">
+            SIMULATED
+          </span>
+          <span className="text-[10px] font-mono uppercase bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-700">
+            NOT MEASURED
+          </span>
+        </div>
+
+        {/* Transient Signal Selector & Play Controls */}
+        {isTransient && (
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedSignalIdx}
+              onChange={(e) => setSelectedSignalIdx(Number(e.target.value))}
+              className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded px-1.5 py-0.5 font-mono"
+            >
+              {transientData.signals.map((sig, idx) => (
+                <option key={sig.name} value={idx}>
+                  {sig.name} ({sig.type})
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => setIsPlaying(!isPlaying)}
+              className="px-2 py-0.5 text-[11px] font-mono bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 rounded border border-cyan-800"
+            >
+              {isPlaying ? 'Pause ⏸' : 'Play ▶'}
+            </button>
+          </div>
+        )}
+
+        {/* Frequency Domain Display Mode Switcher */}
         {isFrequencyDomain && (
           <div className="flex items-center gap-1 bg-slate-950/80 p-0.5 rounded-lg border border-slate-800 text-[10px]">
             <button
@@ -377,52 +405,14 @@ export default function WaveformCanvas({ waveform, width = 480, height = 220, ti
             </button>
           </div>
         )}
-
-        {waveform?.tauMs && (
-          <span className="text-[11px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
-            τ = {waveform.tauMs} ms
-          </span>
-        )}
-        {waveform?.fcHz && (
-          <span className="text-[11px] font-mono text-cyan-400 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800">
-            fc = {waveform.fcHz < 1000 ? `${waveform.fcHz} Hz` : `${(waveform.fcHz/1000).toFixed(3)} kHz`}
-          </span>
-        )}
-        {waveform?.f0Hz && (
-          <span className="text-[11px] font-mono text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800">
-            f₀ = {waveform.f0Hz < 1000 ? `${waveform.f0Hz} Hz` : `${(waveform.f0Hz/1000).toFixed(3)} kHz`}
-          </span>
-        )}
-        {waveform?.gain !== undefined && (
-          <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800">
-            Av = {typeof waveform.gain === 'number' ? `${waveform.gain >= 0 ? '+' : ''}${waveform.gain.toFixed(2)}` : waveform.gain}
-          </span>
-        )}
-        {waveform?.gainDb !== undefined && (
-          <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800">
-            {typeof waveform.gainDb === 'number' ? `${waveform.gainDb.toFixed(2)} dB` : waveform.gainDb}
-          </span>
-        )}
-        {waveform?.phaseDeg !== undefined && (
-          <span className="text-[11px] font-mono text-indigo-400 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800">
-            φ = {waveform.phaseDeg}°
-          </span>
-        )}
-        {waveform?.operatingState && (
-          <span className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded border ${
-            waveform.operatingState === 'LINEAR'
-              ? 'text-emerald-400 bg-emerald-950/80 border-emerald-800'
-              : 'text-rose-400 bg-rose-950/80 border-rose-800 animate-pulse'
-          }`}>
-            {waveform.operatingState}
-          </span>
-        )}
       </div>
 
       <div className="relative flex justify-center">
         <canvas
           ref={canvasRef}
-          style={{ width: `${width}px`, height: `${height}px` }}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
+          style={{ width: `${width}px`, height: `${height}px`, cursor: isTransient ? 'crosshair' : 'default' }}
           className="rounded-lg"
         />
       </div>

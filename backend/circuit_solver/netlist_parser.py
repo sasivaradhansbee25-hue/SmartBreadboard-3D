@@ -128,6 +128,18 @@ def parse_circuit_netlist(netlist: Dict[str, Any]) -> Tuple[List[Component], Lis
                 if val_src != "user_override":
                     val_src = "user_required"
 
+        # Additional terminals (e.g. node3 for transistors / BJTs)
+        n3 = rc.get("node3") or rc.get("hole3") or rc.get("emitter") or rc.get("node_e") or rc.get("node_emitter")
+        if n3:
+            n3 = str(n3)
+            if n3 not in nodes_dict:
+                nodes_dict[n3] = Node(id=n3, label=f"Node {n3}")
+
+        props = dict(rc.get("properties", {}))
+        for key in ["model", "polarity", "collector", "base", "emitter", "node_c", "node_b", "node_e", "node3", "node_collector", "node_base", "node_emitter"]:
+            if key in rc and key not in props:
+                props[key] = rc[key]
+
         comp = Component(
             id=cid,
             type=ctype,
@@ -137,9 +149,16 @@ def parse_circuit_netlist(netlist: Dict[str, Any]) -> Tuple[List[Component], Lis
             unit=unit,
             raw_value=raw_str,
             value_source=val_src,
-            properties=rc.get("properties", {}),
-            holes=[n1, n2]
+            properties=props,
+            holes=[n1, n2] + ([n3] if n3 else [])
         )
+        if n3:
+            setattr(comp, "node3", n3)
+        if "model" in rc:
+            setattr(comp, "model", rc["model"])
+        if "polarity" in rc:
+            setattr(comp, "polarity", rc["polarity"])
+
         parsed_components.append(comp)
 
         # Register nodes if not existing
@@ -149,3 +168,4 @@ def parse_circuit_netlist(netlist: Dict[str, Any]) -> Tuple[List[Component], Lis
             nodes_dict[n2] = Node(id=n2, label=f"Node {n2}")
 
     return parsed_components, raw_sources, nodes_dict
+
