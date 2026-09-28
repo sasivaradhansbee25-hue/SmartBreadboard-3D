@@ -35,17 +35,39 @@ AC:
 
 import unittest
 import math
-from backend.circuit_solver.ic_registry import (
-    IC_REGISTRY,
-    get_ic_definition,
-    resolve_opamp_terminals,
-    validate_opamp_supplies
-)
-from backend.circuit_solver.complex_mna import solve_ac_frequency_point
-from backend.circuit_solver.active_circuit_analyzer import (
-    inspect_active_topology,
-    analyze_active_circuit
-)
+import sys
+import os
+
+_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_repo_dir = os.path.dirname(_backend_dir)
+for p in [_backend_dir, _repo_dir]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+try:
+    from backend.circuit_solver.ic_registry import (
+        IC_REGISTRY,
+        get_ic_definition,
+        resolve_opamp_terminals,
+        validate_opamp_supplies
+    )
+    from backend.circuit_solver.complex_mna import solve_ac_frequency_point
+    from backend.circuit_solver.active_circuit_analyzer import (
+        inspect_active_topology,
+        analyze_active_circuit
+    )
+except ImportError:
+    from circuit_solver.ic_registry import (
+        IC_REGISTRY,
+        get_ic_definition,
+        resolve_opamp_terminals,
+        validate_opamp_supplies
+    )
+    from circuit_solver.complex_mna import solve_ac_frequency_point
+    from circuit_solver.active_circuit_analyzer import (
+        inspect_active_topology,
+        analyze_active_circuit
+    )
 
 
 class TestPhase28ActiveCircuitIntelligence(unittest.TestCase):

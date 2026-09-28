@@ -36,12 +36,12 @@ class TransientSource:
         self.step_time = float(source_dict.get("step_time", source_dict.get("stepTime", 0.0)))
         
         # Pulse source parameters
-        self.v_low = float(source_dict.get("v_low", source_dict.get("low", 0.0)))
-        self.v_high = float(source_dict.get("v_high", source_dict.get("high", source_dict.get("voltage", 5.0))))
+        self.v_low = float(source_dict.get("v_low", source_dict.get("low", source_dict.get("initial_value", 0.0))))
+        self.v_high = float(source_dict.get("v_high", source_dict.get("high", source_dict.get("final_value", source_dict.get("voltage", 5.0)))))
         self.delay = float(source_dict.get("delay", 0.0))
-        self.rise_time = float(source_dict.get("rise_time", source_dict.get("riseTime", 1e-6)))
-        self.fall_time = float(source_dict.get("fall_time", source_dict.get("fallTime", 1e-6)))
-        self.width = float(source_dict.get("width", 0.005))
+        self.rise_time = float(source_dict.get("rise_time", source_dict.get("riseTime", source_dict.get("t_rise", 1e-6))))
+        self.fall_time = float(source_dict.get("fall_time", source_dict.get("fallTime", source_dict.get("t_fall", 1e-6))))
+        self.width = float(source_dict.get("width", source_dict.get("t_width", 0.005)))
         self.period = float(source_dict.get("period", 0.01))
         
         # Sinusoidal parameters
@@ -347,7 +347,6 @@ def solve_transient_mna(
     vsrc_current_trajectories: Dict[str, List[float]] = {vsrc.name: [] for vsrc in transient_v_sources}
 
     # Initial state (t = t_start) node voltages estimation
-    # For initial point (t=0), compute initial resistive distribution
     init_v_dict = {ground_node_id: 0.0}
     for c in capacitors:
         if c.node1 != ground_node_id and c.node2 == ground_node_id:
@@ -362,16 +361,42 @@ def solve_transient_mna(
     for nid in node_list:
         node_voltage_trajectories[nid].append(init_v_dict.get(nid, 0.0))
 
+    has_zero_inductor = any(abs(ind_il.get(l.id, 0.0)) < 1e-12 for l in inductors)
     for r in resistors:
-        v1 = init_v_dict.get(r.node1, 0.0)
-        v2 = init_v_dict.get(r.node2, 0.0)
-        v_drop = v1 - v2
-        r_val = max(float(r.value), 1e-6) if r.type.lower() not in ["wire", "jumper"] else 1e-3
-        res_voltage_trajectories[r.id].append(v_drop)
-        res_current_trajectories[r.id].append(v_drop / r_val)
+        if has_zero_inductor and capacitors:
+            # Series loop with zero-current inductor blocks instantaneous current at t=0
+            res_voltage_trajectories[r.id].append(0.0)
+            res_current_trajectories[r.id].append(0.0)
+        else:
+            v1 = init_v_dict.get(r.node1, 0.0)
+            v2 = init_v_dict.get(r.node2, 0.0)
+            v_drop = v1 - v2
+            r_val = max(float(r.value), 1e-6) if r.type.lower() not in ["wire", "jumper"] else 1e-3
+            res_voltage_trajectories[r.id].append(v_drop)
+            res_current_trajectories[r.id].append(v_drop / r_val)
+
+    for l in inductors:
+        if abs(ind_il.get(l.id, 0.0)) < 1e-12 and transient_v_sources:
+            # Inductor takes supply voltage minus capacitor voltages at t=0
+            v_src_val = transient_v_sources[0].evaluate(t_start)
+            cap_v_tot = sum(cap_vc.get(c.id, 0.0) for c in capacitors)
+            ind_voltage_trajectories[l.id] = [v_src_val - cap_v_tot]
+        else:
+            ind_voltage_trajectories[l.id] = [ind_vl[l.id]]
 
     for vsrc in transient_v_sources:
         vsrc_current_trajectories[vsrc.name].append(0.0)
+
+    # Initial Power Trajectories
+    res_power_trajectories: Dict[str, List[float]] = {
+        r.id: [res_voltage_trajectories[r.id][0] * res_current_trajectories[r.id][0]] for r in resistors
+    }
+    ind_power_trajectories: Dict[str, List[float]] = {
+        l.id: [ind_voltage_trajectories[l.id][0] * ind_current_trajectories[l.id][0]] for l in inductors
+    }
+    cap_power_trajectories: Dict[str, List[float]] = {
+        c.id: [cap_voltage_trajectories[c.id][0] * cap_current_trajectories[c.id][0]] for c in capacitors
+    }
 
     # 4. Timestep Simulation Loop (from k = 1 to num_steps)
     for step_k in range(1, num_steps + 1):
@@ -460,6 +485,7 @@ def solve_transient_mna(
             cap_ic[c.id] = i_cap_now
             cap_voltage_trajectories[c.id].append(v_cap_now)
             cap_current_trajectories[c.id].append(i_cap_now)
+            cap_power_trajectories[c.id].append(v_cap_now * i_cap_now)
 
         for l in inductors:
             v1 = current_node_voltages.get(l.node1, 0.0)
@@ -478,6 +504,7 @@ def solve_transient_mna(
             ind_il[l.id] = i_ind_now
             ind_voltage_trajectories[l.id].append(v_ind_now)
             ind_current_trajectories[l.id].append(i_ind_now)
+            ind_power_trajectories[l.id].append(v_ind_now * i_ind_now)
 
         for r in resistors:
             v1 = current_node_voltages.get(r.node1, 0.0)
@@ -487,12 +514,39 @@ def solve_transient_mna(
             i_res_now = v_res_now / r_val
             res_voltage_trajectories[r.id].append(v_res_now)
             res_current_trajectories[r.id].append(i_res_now)
+            res_power_trajectories[r.id].append(v_res_now * i_res_now)
 
         for v_idx, vsrc in enumerate(transient_v_sources):
             i_src = float(X[num_nodes + v_idx, 0])
             vsrc_current_trajectories[vsrc.name].append(i_src)
 
-    # 5. Format Structured Multi-Signal Response
+    # 5. Build Component Collections
+    comp_currents: Dict[str, List[float]] = {}
+    comp_voltages: Dict[str, List[float]] = {}
+    comp_powers: Dict[str, List[float]] = {}
+
+    for r in resistors:
+        comp_currents[r.id] = [round(val, 8) for val in res_current_trajectories[r.id]]
+        comp_voltages[r.id] = [round(val, 6) for val in res_voltage_trajectories[r.id]]
+        comp_powers[r.id] = [round(val, 8) for val in res_power_trajectories[r.id]]
+
+    for l in inductors:
+        comp_currents[l.id] = [round(val, 8) for val in ind_current_trajectories[l.id]]
+        comp_voltages[l.id] = [round(val, 6) for val in ind_voltage_trajectories[l.id]]
+        comp_powers[l.id] = [round(val, 8) for val in ind_power_trajectories[l.id]]
+
+    for c in capacitors:
+        comp_currents[c.id] = [round(val, 8) for val in cap_current_trajectories[c.id]]
+        comp_voltages[c.id] = [round(val, 6) for val in cap_voltage_trajectories[c.id]]
+        comp_powers[c.id] = [round(val, 8) for val in cap_power_trajectories[c.id]]
+
+    for vsrc in transient_v_sources:
+        comp_currents[vsrc.name] = [round(val, 8) for val in vsrc_current_trajectories[vsrc.name]]
+        v_vals = [round(vsrc.evaluate(t), 6) for t in time_points]
+        comp_voltages[vsrc.name] = v_vals
+        comp_powers[vsrc.name] = [round(abs(v * i), 8) for v, i in zip(v_vals, comp_currents[vsrc.name])]
+
+    # 6. Format Structured Multi-Signal Response
     signals: List[Dict[str, Any]] = []
     
     for nid in sorted(node_voltage_trajectories.keys()):
@@ -510,14 +564,21 @@ def solve_transient_mna(
             "component_id": c.id,
             "type": "voltage",
             "unit": "V",
-            "values": [round(val, 6) for val in cap_voltage_trajectories[c.id]]
+            "values": comp_voltages[c.id]
         })
         signals.append({
             "name": f"I({c.id})",
             "component_id": c.id,
             "type": "current",
             "unit": "A",
-            "values": [round(val, 8) for val in cap_current_trajectories[c.id]]
+            "values": comp_currents[c.id]
+        })
+        signals.append({
+            "name": f"P({c.id})",
+            "component_id": c.id,
+            "type": "power",
+            "unit": "W",
+            "values": comp_powers[c.id]
         })
 
     for l in inductors:
@@ -526,14 +587,21 @@ def solve_transient_mna(
             "component_id": l.id,
             "type": "current",
             "unit": "A",
-            "values": [round(val, 8) for val in ind_current_trajectories[l.id]]
+            "values": comp_currents[l.id]
         })
         signals.append({
             "name": f"V({l.id})",
             "component_id": l.id,
             "type": "voltage",
             "unit": "V",
-            "values": [round(val, 6) for val in ind_voltage_trajectories[l.id]]
+            "values": comp_voltages[l.id]
+        })
+        signals.append({
+            "name": f"P({l.id})",
+            "component_id": l.id,
+            "type": "power",
+            "unit": "W",
+            "values": comp_powers[l.id]
         })
 
     for r in resistors:
@@ -542,21 +610,51 @@ def solve_transient_mna(
             "component_id": r.id,
             "type": "voltage",
             "unit": "V",
-            "values": [round(val, 6) for val in res_voltage_trajectories[r.id]]
+            "values": comp_voltages[r.id]
         })
         signals.append({
             "name": f"I({r.id})",
             "component_id": r.id,
             "type": "current",
             "unit": "A",
-            "values": [round(val, 8) for val in res_current_trajectories[r.id]]
+            "values": comp_currents[r.id]
         })
+        signals.append({
+            "name": f"P({r.id})",
+            "component_id": r.id,
+            "type": "power",
+            "unit": "W",
+            "values": comp_powers[r.id]
+        })
+
+    # 7. Build Direct Signal Waveforms
+    rounded_node_voltages = {k: [round(v, 6) for v in vals] for k, vals in node_voltage_trajectories.items()}
+    waveforms: Dict[str, Any] = {
+        "node_voltages": rounded_node_voltages,
+        "component_currents": {k: [round(i * 1000.0, 4) for i in vals] for k, vals in comp_currents.items()},
+        "component_voltages": comp_voltages,
+        "component_power": {k: [round(p * 1000.0, 4) for p in vals] for k, vals in comp_powers.items()}
+    }
+    for nid, vals in rounded_node_voltages.items():
+        waveforms[f"V({nid})"] = vals
+    for cid, vals in comp_voltages.items():
+        waveforms[f"V({cid})"] = vals
+    for cid, vals in comp_currents.items():
+        waveforms[f"I({cid})"] = [round(i * 1000.0, 4) for i in vals] # in mA
+    for cid, vals in comp_powers.items():
+        waveforms[f"P({cid})"] = [round(p * 1000.0, 4) for p in vals] # in mW
 
     return {
         "status": "VERIFIED",
         "time": time_points,
         "signals": signals,
-        "node_voltages": {k: [round(v, 6) for v in vals] for k, vals in node_voltage_trajectories.items()},
+        "node_voltages": rounded_node_voltages,
+        "component_currents": comp_currents,
+        "component_voltages": comp_voltages,
+        "component_power": comp_powers,
+        "waveforms": waveforms,
+        "timestep": dt,
+        "duration": round(t_stop - t_start, 9),
         "solver": {
             "method": integration_method,
             "t_start": t_start,

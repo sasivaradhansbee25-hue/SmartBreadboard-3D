@@ -164,6 +164,34 @@ export function calculateComponentElectricalActivity(compType, electrical, solve
     }
   }
 
+  // Capacitor electric charge / voltage state highlight
+  if (type.includes('capacitor') || type.includes('cap')) {
+    const vDrop = Math.abs(electrical.voltage_drop ?? electrical.voltage ?? 0);
+    if (vDrop > 0.05) { // Charged above 50mV
+      const norm = Math.min(vDrop / 5.0, 1.0);
+      const pulse = 1.0 + 0.06 * Math.sin(time * 2.0); // Subtle 0.3Hz charge pulse
+      return {
+        active: true,
+        emissiveColor: 0x38bdf8, // Electric Cyan
+        emissiveIntensity: Math.min((0.15 + norm * 0.45) * pulse, 0.75)
+      };
+    }
+  }
+
+  // Inductor magnetic flux / current state highlight
+  if (type.includes('inductor') || type.includes('ind')) {
+    const current = Math.abs(electrical.current ?? 0);
+    if (current > 1e-5) { // Conducting above 10uA
+      const norm = Math.min(current / 0.02, 1.0);
+      const pulse = 1.0 + 0.08 * Math.sin(time * 4.0); // Inductive flux pulse
+      return {
+        active: true,
+        emissiveColor: 0xf59e0b, // Magnetic Amber
+        emissiveIntensity: Math.min((0.2 + norm * 0.5) * pulse, 0.8)
+      };
+    }
+  }
+
   // Diode / Rectifier conducting state highlight
   if (type.includes('diode')) {
     const state = String(electrical.state || '').toUpperCase();

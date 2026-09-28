@@ -9,23 +9,49 @@ transient switching, dynamic junction capacitances, temperature sensitivity, and
 import unittest
 import numpy as np
 from typing import Dict, Any
+import sys
+import os
 
-from backend.circuit_solver.bjt_registry import (
-    get_bjt_definition,
-    BJT_REGISTRY,
-    THERMAL_VOLTAGE_300K,
-    compute_thermal_voltage
-)
-from backend.circuit_solver.nonlinear_transient_mna import (
-    BJTNonlinearModel,
-    DiodeNonlinearModel,
-    solve_nonlinear_transient_mna
-)
-from backend.circuit_solver.bjt_behavior import (
-    classify_bjt_topology,
-    extract_bjt_metrics,
-    analyze_bjt_circuit
-)
+_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_repo_dir = os.path.dirname(_backend_dir)
+for p in [_backend_dir, _repo_dir]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+try:
+    from backend.circuit_solver.bjt_registry import (
+        get_bjt_definition,
+        BJT_REGISTRY,
+        THERMAL_VOLTAGE_300K,
+        compute_thermal_voltage
+    )
+    from backend.circuit_solver.nonlinear_transient_mna import (
+        BJTNonlinearModel,
+        DiodeNonlinearModel,
+        solve_nonlinear_transient_mna
+    )
+    from backend.circuit_solver.bjt_behavior import (
+        classify_bjt_topology,
+        extract_bjt_metrics,
+        analyze_bjt_circuit
+    )
+except ImportError:
+    from circuit_solver.bjt_registry import (
+        get_bjt_definition,
+        BJT_REGISTRY,
+        THERMAL_VOLTAGE_300K,
+        compute_thermal_voltage
+    )
+    from circuit_solver.nonlinear_transient_mna import (
+        BJTNonlinearModel,
+        DiodeNonlinearModel,
+        solve_nonlinear_transient_mna
+    )
+    from circuit_solver.bjt_behavior import (
+        classify_bjt_topology,
+        extract_bjt_metrics,
+        analyze_bjt_circuit
+    )
 
 
 class TestBJTModel(unittest.TestCase):
@@ -294,7 +320,7 @@ class TestBJTModel(unittest.TestCase):
         )
 
         print("\n=== TEST 11 COMMON COLLECTOR RESULT ===")
-        print(res)
+        print(str(res).encode("ascii", "replace").decode("ascii"))
 
         self.assertEqual(res["status"], "VERIFIED")
         self.assertEqual(

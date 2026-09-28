@@ -11,6 +11,9 @@ import LiveGraphInspector from '../components/LiveGraphInspector';
 import ValueInputModal from '../components/ValueInputModal';
 import UserCorrectionModal from '../components/UserCorrectionModal';
 import CircuitIntelligencePanel from '../components/Intelligence/CircuitIntelligencePanel';
+import SupplyConfigurationPanel from '../components/SupplyConfigurationPanel';
+import SimulationGraphPanel from '../components/SimulationGraphPanel';
+import SimulationWaveformPanel from '../components/SimulationWaveformPanel';
 
 export default function Simulator() {
   const { activeCircuit, setMockCircuitData, loadDemoCircuit, solverStatus, solverError } = useCircuit();
@@ -19,6 +22,7 @@ export default function Simulator() {
   const [correctingComp, setCorrectingComp] = useState(null);
 
   const isReal = activeCircuit.source === 'real';
+  const [powerMode, setPowerMode] = useState('manual_supply'); // 'manual_supply' | 'power_rails'
 
   return (
     <div>
@@ -151,8 +155,47 @@ export default function Simulator() {
         </div>
       </div>
 
-      {/* Simulation Power Source Setup Panel */}
-      <PowerSourcePanel />
+      {/* Power Supply Mode Selector */}
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
+        <button
+          onClick={() => setPowerMode('manual_supply')}
+          className="btn btn-secondary"
+          style={{
+            fontSize: '0.8rem',
+            padding: '0.4rem 0.8rem',
+            borderColor: powerMode === 'manual_supply' ? '#38bdf8' : 'var(--border-color)',
+            background: powerMode === 'manual_supply' ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255,255,255,0.03)',
+            color: powerMode === 'manual_supply' ? '#38bdf8' : '#94a3b8',
+            fontWeight: powerMode === 'manual_supply' ? '700' : '500'
+          }}
+        >
+          ⚡ Manual Supply Configuration (Phase 24.2)
+        </button>
+        <button
+          onClick={() => setPowerMode('power_rails')}
+          className="btn btn-secondary"
+          style={{
+            fontSize: '0.8rem',
+            padding: '0.4rem 0.8rem',
+            borderColor: powerMode === 'power_rails' ? '#38bdf8' : 'var(--border-color)',
+            background: powerMode === 'power_rails' ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255,255,255,0.03)',
+            color: powerMode === 'power_rails' ? '#38bdf8' : '#94a3b8',
+            fontWeight: powerMode === 'power_rails' ? '700' : '500'
+          }}
+        >
+          🔋 Legacy Rail Source Setup
+        </button>
+      </div>
+
+      {/* Selected Power Setup Panel */}
+      {powerMode === 'manual_supply' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.25rem', marginBottom: '1.25rem' }}>
+          <SupplyConfigurationPanel />
+          <SimulationWaveformPanel />
+        </div>
+      ) : (
+        <PowerSourcePanel />
+      )}
 
       {/* Simulation Controls Toolbar */}
       <SimulationControls />

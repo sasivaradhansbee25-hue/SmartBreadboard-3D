@@ -5,6 +5,13 @@ import { requestDcSimulation } from '../services/analysisService';
 import { requestTransientAnalysis } from '../services/transientAnalysisService';
 import { parseComponentValue, formatEngineeringValue } from '../utils/valueParser';
 import { analyzeCircuitIntelligence } from '../intelligence/index.js';
+import {
+  configureSupplyAPI,
+  clearSupplyAPI,
+  simulateCircuitAPI,
+  SUPPLY_STATUS,
+  SIMULATION_STATUS
+} from '../services/supplyConfigurationService.js';
 
 const CircuitContext = createContext(null);
 const MAX_HISTORY_LENGTH = 20;
@@ -37,6 +44,154 @@ export function CircuitProvider({ children }) {
   const [measurements, setMeasurements] = useState({});
   const [solverStatus, setSolverStatus] = useState('IDLE'); // 'IDLE', 'SOLVED', 'ERROR', 'NOT_RUN', 'POWER_REQUIRED'
   const [solverError, setSolverError] = useState(null);
+
+  // Phase 24.2 Manual Supply Configuration & Simulation Control
+  const [supplyConfiguration, setSupplyConfiguration] = useState({
+    enabled: false,
+    source_id: 'V1',
+    positive_node: null,
+    ground_node: null,
+    voltage: 5.0,
+    reference: 'GROUND',
+    status: 'NOT_CONFIGURED'
+  });
+  const [simulationStatus, setSimulationStatus] = useState('READY');
+  const [simulationError, setSimulationError] = useState(null);
+  const [simulationSignature, setSimulationSignature] = useState(null);
+
+  // Phase 24.4: Real RLC Transient Simulation Timeline & Playback State
+  const [currentTimeIndex, setCurrentTimeIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+
+  const invalidateSimulation = useCallback((reason = null) => {
+    setSimulationResult(null);
+    setSimulationStatus('READY');
+    setSimulationSignature(null);
+    setSimulationError(reason);
+    setMeasurements({});
+    setCurrentTimeIndex(0);
+    setIsPlaying(false);
+  }, []);
+
+  // Phase 24.4: Authoritative instantaneous transient sample synced to timeline cursor
+  const currentTransientSample = useMemo(() => {
+    if (!simulationResult || !Array.isArray(simulationResult.time) || simulationResult.time.length === 0) {
+      return null;
+    }
+    const totalPoints = simulationResult.time.length;
+    const idx = Math.min(Math.max(0, currentTimeIndex), totalPoints - 1);
+    const t = simulationResult.time[idx];
+
+    const nodeVoltages = {};
+    if (simulationResult.node_voltages) {
+      Object.entries(simulationResult.node_voltages).forEach(([k, arr]) => {
+        nodeVoltages[k] = Array.isArray(arr) ? arr[idx] : arr;
+      });
+    }
+
+    const componentVoltages = {};
+    if (simulationResult.component_voltages) {
+      Object.entries(simulationResult.component_voltages).forEach(([k, arr]) => {
+        componentVoltages[k] = Array.isArray(arr) ? arr[idx] : arr;
+      });
+    }
+
+    const componentCurrents = {};
+    if (simulationResult.component_currents) {
+      Object.entries(simulationResult.component_currents).forEach(([k, arr]) => {
+        componentCurrents[k] = Array.isArray(arr) ? arr[idx] : arr;
+      });
+    }
+
+    const componentPower = {};
+    if (simulationResult.component_power) {
+      Object.entries(simulationResult.component_power).forEach(([k, arr]) => {
+        componentPower[k] = Array.isArray(arr) ? arr[idx] : arr;
+      });
+    }
+
+    return {
+      time: t,
+      timeIndex: idx,
+      totalPoints,
+      duration: simulationResult.duration || simulationResult.time[totalPoints - 1] || 0.01,
+      timestep: simulationResult.timestep || 0.0001,
+      nodeVoltages,
+      componentVoltages,
+      componentCurrents,
+      componentPower
+    };
+  }, [simulationResult, currentTimeIndex]);
+
+  // Phase 24.4: Playback Animation Loop
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    if (!simulationResult?.time || simulationResult.time.length <= 1) {
+      setIsPlaying(false);
+      return;
+    }
+
+    const totalSteps = simulationResult.time.length;
+    const interval = setInterval(() => {
+      setCurrentTimeIndex(prevIdx => {
+        if (prevIdx >= totalSteps - 1) {
+          setIsPlaying(false);
+          setSimulationStatus('SOLVED');
+          return prevIdx;
+        }
+        return prevIdx + 1;
+      });
+    }, Math.max(16, Math.round(33 / playbackSpeed)));
+
+    return () => clearInterval(interval);
+  }, [isPlaying, simulationResult, playbackSpeed]);
+
+  const playSimulation = useCallback(() => {
+    if (!simulationResult?.time || simulationResult.time.length === 0) return;
+    if (currentTimeIndex >= simulationResult.time.length - 1) {
+      setCurrentTimeIndex(0);
+    }
+    setIsPlaying(true);
+    setSimulationStatus('RUNNING');
+  }, [simulationResult, currentTimeIndex]);
+
+  const pauseSimulation = useCallback(() => {
+    setIsPlaying(false);
+    setSimulationStatus('PAUSED');
+  }, []);
+
+  const restartSimulation = useCallback(() => {
+    if (!simulationResult?.time || simulationResult.time.length === 0) return;
+    setCurrentTimeIndex(0);
+    setIsPlaying(true);
+    setSimulationStatus('RUNNING');
+  }, [simulationResult]);
+
+  const seekSimulation = useCallback((targetIndexOrRatio) => {
+    if (!simulationResult?.time || simulationResult.time.length === 0) return;
+    const total = simulationResult.time.length;
+    let targetIdx = 0;
+    if (typeof targetIndexOrRatio === 'number') {
+      if (targetIndexOrRatio <= 1.0 && targetIndexOrRatio >= 0.0 && !Number.isInteger(targetIndexOrRatio)) {
+        targetIdx = Math.round(targetIndexOrRatio * (total - 1));
+      } else {
+        targetIdx = Math.round(targetIndexOrRatio);
+      }
+    }
+    setCurrentTimeIndex(Math.min(Math.max(0, targetIdx), total - 1));
+  }, [simulationResult]);
+
+  const resetSimulation = useCallback(() => {
+    setIsPlaying(false);
+    setCurrentTimeIndex(0);
+    setSimulationResult(null);
+    setSimulationSignature(null);
+    setSimulationStatus('READY');
+    setSimulationError(null);
+    setMeasurements({});
+  }, []);
 
   // Phase 29: Transient Circuit Analysis State
   const [transientAnalysis, setTransientAnalysis] = useState(null);
@@ -240,6 +395,7 @@ export function CircuitProvider({ children }) {
 
     pushHistorySnapshot(newCircuit);
     setActiveCircuit(newCircuit);
+    invalidateSimulation();
 
     // Update selectedComponent if it matches
     if (selectedComponent && (selectedComponent.id === compId || selectedComponent.designator === compId)) {
@@ -318,6 +474,7 @@ export function CircuitProvider({ children }) {
 
     pushHistorySnapshot(newCircuit);
     setActiveCircuit(newCircuit);
+    invalidateSimulation();
 
     return { success: true, component: manualComponent };
   };
@@ -348,6 +505,7 @@ export function CircuitProvider({ children }) {
 
     pushHistorySnapshot(newCircuit);
     setActiveCircuit(newCircuit);
+    invalidateSimulation();
   };
 
   const removeDigitalWire = (wireId) => {
@@ -361,6 +519,7 @@ export function CircuitProvider({ children }) {
 
     pushHistorySnapshot(newCircuit);
     setActiveCircuit(newCircuit);
+    invalidateSimulation();
   };
 
   // 4. Undo / Redo / Reset Functions
@@ -447,13 +606,83 @@ export function CircuitProvider({ children }) {
     };
 
     // Invalidate simulation on manual terminal update
-    setSimulationResult(null);
-    setMeasurements({});
+    invalidateSimulation();
     setSolverStatus('NOT_RUN');
 
     setActiveCircuit(updatedCircuit);
     pushHistorySnapshot(updatedCircuit);
-  }, [activeCircuit, pushHistorySnapshot]);
+  }, [activeCircuit, pushHistorySnapshot, invalidateSimulation]);
+
+  // Phase 24.2 Manual Supply Actions
+  const configureSupply = useCallback(async (posNode, gndNode, voltageVal) => {
+    const res = await configureSupplyAPI(posNode, gndNode, voltageVal, activeCircuit);
+    if (res && res.supply) {
+      setSupplyConfiguration(res.supply);
+    }
+    invalidateSimulation();
+    if (activeCircuit) {
+      setActiveCircuit(prev => ({
+        ...prev,
+        supply: res?.supply,
+        circuit_signature: res?.circuit_signature || prev.circuit_signature
+      }));
+    }
+    return res;
+  }, [activeCircuit, invalidateSimulation]);
+
+  const clearSupply = useCallback(async () => {
+    const res = await clearSupplyAPI(activeCircuit);
+    setSupplyConfiguration({
+      enabled: false,
+      source_id: 'V1',
+      positive_node: null,
+      ground_node: null,
+      voltage: 5.0,
+      reference: 'GROUND',
+      status: 'NOT_CONFIGURED'
+    });
+    invalidateSimulation();
+    if (activeCircuit) {
+      setActiveCircuit(prev => ({
+        ...prev,
+        supply: null,
+        circuit_signature: res?.circuit_signature || prev.circuit_signature
+      }));
+    }
+    return res;
+  }, [activeCircuit, invalidateSimulation]);
+
+  const simulateCircuit = useCallback(async (options = {}) => {
+    if (!activeCircuit) {
+      setSimulationStatus('BLOCKED');
+      setSimulationError('AMBIGUOUS_CIRCUIT');
+      return null;
+    }
+
+    setSimulationStatus('RUNNING');
+    setSimulationError(null);
+
+    const simRes = await simulateCircuitAPI(activeCircuit, supplyConfiguration, activeCircuit.circuit_signature, options);
+
+    if (simRes && simRes.status === 'SOLVED') {
+      setSimulationResult(simRes);
+      setSimulationStatus('SOLVED');
+      setSimulationSignature(simRes.circuit_signature || activeCircuit.circuit_signature);
+      setSimulationError(null);
+      setCurrentTimeIndex(0);
+      setIsPlaying(false);
+      if (simRes.results?.measurements) {
+        setMeasurements(simRes.results.measurements);
+      }
+      return simRes;
+    } else {
+      setSimulationResult(null);
+      setSimulationStatus('BLOCKED');
+      setSimulationSignature(null);
+      setSimulationError(simRes?.reason || 'SOLVER_ERROR');
+      return simRes;
+    }
+  }, [activeCircuit, supplyConfiguration]);
 
   // 5. What-If Simulation Engine
   const startWhatIf = async (targetComp, candidateVal) => {
@@ -708,7 +937,27 @@ export function CircuitProvider({ children }) {
       transientConfig,
       setTransientConfig,
       runTransientAnalysis,
-      clearTransientAnalysis
+      clearTransientAnalysis,
+      // Phase 24.2 Manual Supply Configuration & Simulation Control
+      supplyConfiguration,
+      configureSupply,
+      clearSupply,
+      simulateCircuit,
+      simulationStatus,
+      simulationError,
+      simulationSignature,
+      // Phase 24.4 Real RLC Transient Simulation Controls & Timeline
+      currentTimeIndex,
+      setCurrentTimeIndex,
+      isPlaying,
+      playbackSpeed,
+      setPlaybackSpeed,
+      currentTransientSample,
+      playSimulation,
+      pauseSimulation,
+      restartSimulation,
+      seekSimulation,
+      resetSimulation
     }}>
       {children}
     </CircuitContext.Provider>

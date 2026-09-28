@@ -1,9 +1,10 @@
 import React from 'react';
-import { ShieldCheck, AlertCircle, CheckCircle2, FlaskConical, Layers, FileText, Bug } from 'lucide-react';
+import { ShieldCheck, AlertCircle, CheckCircle2, FlaskConical, Layers, FileText, Bug, Cpu } from 'lucide-react';
 
 export default function ValidationSummaryHeader({ summary, activeTab, onSelectTab }) {
   const tabs = [
     { id: 'benchmarks', label: 'Benchmark Suite (PHYS-001 - 010)', icon: Layers, count: summary?.total_benchmarks || 10 },
+    { id: 'hardware-calibration', label: 'Hardware Calibration (Phase 23)', icon: Cpu, count: 5 },
     { id: 'comparison', label: 'Software vs Physical Audit', icon: FlaskConical },
     { id: 'failure-injection', label: 'Failure Injection (Faults A-F)', icon: Bug, count: 6 },
     { id: 'report', label: 'Formal Audit Report', icon: FileText }

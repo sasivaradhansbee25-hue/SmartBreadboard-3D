@@ -3,6 +3,7 @@ import { Scan, Upload, Camera, FileText, CheckCircle2, ShieldAlert, Sparkles, La
 import { mockCircuits } from '../data/mockCircuits';
 import { useCircuit } from '../context/CircuitContext';
 import Breadboard3DCanvas from '../components/Breadboard3DCanvas';
+import PhotoCircuitMapper from '../components/PhotoCircuitMapper';
 import { API_BASE_URL } from '../services/api';
 
 const CLASS_COLOR_BADGES = {
@@ -39,6 +40,8 @@ export default function Scanner() {
     capacitor: 0,
     led: 0
   });
+
+  const [scannerMode, setScannerMode] = useState('photo_mapper');
 
   const handleSelectSample = (circ) => {
     setSelectedSample(circ);
@@ -185,8 +188,59 @@ export default function Scanner() {
         </div>
       </div>
 
-      {/* Development Sample Selector & Upload */}
-      <div className="card" style={{ marginBottom: '1.25rem', padding: '1rem 1.25rem' }}>
+      {/* Mode Switcher Tabs */}
+      <div style={{
+        display: 'flex',
+        gap: '0.5rem',
+        borderBottom: '1px solid #1e293b',
+        marginBottom: '1.5rem'
+      }}>
+        <button
+          onClick={() => setScannerMode('photo_mapper')}
+          style={{
+            background: 'none',
+            border: 'none',
+            borderBottom: scannerMode === 'photo_mapper' ? '2px solid #38bdf8' : '2px solid transparent',
+            color: scannerMode === 'photo_mapper' ? '#38bdf8' : '#94a3b8',
+            padding: '0.6rem 1.1rem',
+            fontSize: '0.85rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem'
+          }}
+        >
+          <Sparkles size={15} />
+          Photo-to-Circuit AR Simulation (Phase 25 Final Submission)
+        </button>
+        <button
+          onClick={() => setScannerMode('raw_inspector')}
+          style={{
+            background: 'none',
+            border: 'none',
+            borderBottom: scannerMode === 'raw_inspector' ? '2px solid #38bdf8' : '2px solid transparent',
+            color: scannerMode === 'raw_inspector' ? '#38bdf8' : '#94a3b8',
+            padding: '0.6rem 1.1rem',
+            fontSize: '0.85rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem'
+          }}
+        >
+          <Eye size={15} />
+          Raw YOLO & Vision Inspector
+        </button>
+      </div>
+
+      {scannerMode === 'photo_mapper' ? (
+        <PhotoCircuitMapper />
+      ) : (
+        <>
+          {/* Development Sample Selector & Upload */}
+          <div className="card" style={{ marginBottom: '1.25rem', padding: '1rem 1.25rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-muted)' }}>Samples:</span>
@@ -519,6 +573,8 @@ export default function Scanner() {
           )}
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }

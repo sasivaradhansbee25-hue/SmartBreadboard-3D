@@ -5,6 +5,7 @@ import CaseDetailModal from '../components/Validation/CaseDetailModal';
 import SoftwareVsPhysicalView from '../components/Validation/SoftwareVsPhysicalView';
 import FailureInjectionView from '../components/Validation/FailureInjectionView';
 import ValidationReportViewer from '../components/Validation/ValidationReportViewer';
+import PhysicalValidationPanel from '../components/PhysicalValidationPanel';
 import {
   fetchValidationSummary,
   fetchValidationBenchmarks,
@@ -77,6 +78,10 @@ export default function Validation() {
                 benchmarks={benchmarks}
                 onInspectCase={(c) => setSelectedCase(c)}
               />
+            )}
+
+            {activeTab === 'hardware-calibration' && (
+              <PhysicalValidationPanel />
             )}
 
             {activeTab === 'comparison' && (

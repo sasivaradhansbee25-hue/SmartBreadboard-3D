@@ -8,22 +8,47 @@ dynamic capacitance, overflow protection, and scientific metadata integrity.
 import unittest
 import numpy as np
 from typing import Dict, Any
+import sys
+import os
 
-from backend.circuit_solver.semiconductor_registry import (
-    get_semiconductor_definition,
-    SEMICONDUCTOR_REGISTRY,
-    THERMAL_VOLTAGE_300K
-)
-from backend.circuit_solver.nonlinear_transient_mna import (
-    DiodeNonlinearModel,
-    solve_nonlinear_transient_mna
-)
-from backend.circuit_solver.semiconductor_behavior import (
-    classify_semiconductor_topology,
-    extract_semiconductor_metrics,
-    analyze_semiconductor_circuit
-)
-from backend.circuit_solver.transient_behavior import analyze_transient_circuit
+_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_repo_dir = os.path.dirname(_backend_dir)
+for p in [_backend_dir, _repo_dir]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+try:
+    from backend.circuit_solver.semiconductor_registry import (
+        get_semiconductor_definition,
+        SEMICONDUCTOR_REGISTRY,
+        THERMAL_VOLTAGE_300K
+    )
+    from backend.circuit_solver.nonlinear_transient_mna import (
+        DiodeNonlinearModel,
+        solve_nonlinear_transient_mna
+    )
+    from backend.circuit_solver.semiconductor_behavior import (
+        classify_semiconductor_topology,
+        extract_semiconductor_metrics,
+        analyze_semiconductor_circuit
+    )
+    from backend.circuit_solver.transient_behavior import analyze_transient_circuit
+except ImportError:
+    from circuit_solver.semiconductor_registry import (
+        get_semiconductor_definition,
+        SEMICONDUCTOR_REGISTRY,
+        THERMAL_VOLTAGE_300K
+    )
+    from circuit_solver.nonlinear_transient_mna import (
+        DiodeNonlinearModel,
+        solve_nonlinear_transient_mna
+    )
+    from circuit_solver.semiconductor_behavior import (
+        classify_semiconductor_topology,
+        extract_semiconductor_metrics,
+        analyze_semiconductor_circuit
+    )
+    from circuit_solver.transient_behavior import analyze_transient_circuit
 
 
 class TestNonlinearSemiconductor(unittest.TestCase):

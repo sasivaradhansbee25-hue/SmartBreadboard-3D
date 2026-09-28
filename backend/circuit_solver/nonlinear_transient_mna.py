@@ -310,7 +310,7 @@ class BJTNonlinearModel:
             dIb_dVe = -(g_f / self.beta_f)
 
             dIc_dVb = (g_f - g_r) * f_early - (g_r / self.beta_r)
-            dIc_dVc = -g_r * f_early - (g_r / self.beta_r) + (i_f - i_r) * df_early
+            dIc_dVc = g_r * f_early + (g_r / self.beta_r) + (i_f - i_r) * df_early
             dIc_dVe = -g_f * f_early - (i_f - i_r) * df_early
 
             dIe_dVb = -(dIb_dVb + dIc_dVb)
@@ -494,7 +494,7 @@ def solve_nonlinear_transient_mna(
             d_model = DiodeNonlinearModel(comp, custom_params=nl_cfg.get("device_overrides", {}).get(comp.id))
             d_model.enable_dynamic_capacitance = enable_dynamic_cap
             diodes.append(d_model)
-        elif ctype in ["bjt", "transistor", "npn", "pnp"]:
+        elif ctype in ["bjt", "transistor", "npn", "pnp", "bjt_npn", "bjt_pnp"]:
             q_model = BJTNonlinearModel(comp, custom_params=nl_cfg.get("device_overrides", {}).get(comp.id))
             q_model.enable_dynamic_capacitance = enable_dynamic_cap
             bjts.append(q_model)
@@ -535,11 +535,22 @@ def solve_nonlinear_transient_mna(
     transient_v_sources: List[TransientSource] = []
     if source_config:
         src_dict = dict(source_config)
-        if "positive_node" not in src_dict and sources:
-            src_dict["positive_node"] = sources[0].get("positive_node") or sources[0].get("node_pos")
-        if "negative_node" not in src_dict and sources:
-            src_dict["negative_node"] = sources[0].get("negative_node") or sources[0].get("node_neg")
+        pos = src_dict.get("positive_node") or src_dict.get("node_pos")
+        neg = src_dict.get("negative_node") or src_dict.get("node_neg")
+        if not pos and sources:
+            pos = sources[0].get("positive_node") or sources[0].get("node_pos")
+        if not neg and sources:
+            neg = sources[0].get("negative_node") or sources[0].get("node_neg")
+        src_dict["positive_node"] = pos
+        src_dict["negative_node"] = neg
         transient_v_sources.append(TransientSource(src_dict))
+
+        # Also preserve any DC power rail supplies connecting to different nodes
+        for s in sources:
+            s_pos = s.get("positive_node") or s.get("node_pos")
+            s_neg = s.get("negative_node") or s.get("node_neg")
+            if s_pos != pos or s_neg != neg:
+                transient_v_sources.append(TransientSource(s))
     elif sources:
         for s in sources:
             transient_v_sources.append(TransientSource(s))

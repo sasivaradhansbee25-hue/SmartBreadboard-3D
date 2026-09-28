@@ -65,9 +65,9 @@ def parse_circuit_netlist(netlist: Dict[str, Any]) -> Tuple[List[Component], Lis
         cid = rc.get("designator") or rc.get("id") or f"C{idx+1}"
         ctype = str(rc.get("type", rc.get("class", "resistor"))).lower()
 
-        # Extract node connections
-        n1 = str(rc.get("node1") or rc.get("hole1") or rc.get("node1_hole") or rc.get("start_hole") or "NODE_PWR")
-        n2 = str(rc.get("node2") or rc.get("hole2") or rc.get("node2_hole") or rc.get("end_hole") or "NODE_GND")
+        # Extract node connections (supporting collector/base/emitter for transistors)
+        n1 = str(rc.get("node1") or rc.get("hole1") or rc.get("node1_hole") or rc.get("start_hole") or rc.get("collector") or rc.get("node_c") or rc.get("node_collector") or "NODE_PWR")
+        n2 = str(rc.get("node2") or rc.get("hole2") or rc.get("node2_hole") or rc.get("end_hole") or rc.get("base") or rc.get("node_b") or rc.get("node_base") or "NODE_GND")
 
         if n1 not in nodes_dict:
             nodes_dict[n1] = Node(id=n1, label=n1)

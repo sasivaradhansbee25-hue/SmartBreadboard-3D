@@ -6,7 +6,8 @@ Phase 9 OpenCV Preprocessing, Phase 10 YOLO Detection, Phase 11 Resistor Color, 
 import os
 import socket
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, File, UploadFile
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, File, UploadFile, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -75,10 +76,31 @@ class CircuitAnalysisRequest(BaseModel):
     netlist: Dict[str, Any]
 
 class CircuitSimulateRequest(BaseModel):
-    netlist: Dict[str, Any]
+    netlist: Optional[Dict[str, Any]] = None
+    circuit_state: Optional[Dict[str, Any]] = None
+    supply: Optional[Dict[str, Any]] = None
+    expected_signature: Optional[str] = None
     duration: Optional[float] = 0.01
     timestep: Optional[float] = 0.0001
-    simulation_mode: Optional[str] = "transient"
+    simulation_mode: Optional[str] = "DC"
+
+class SupplyConfigureRequest(BaseModel):
+    positive_node: str
+    ground_node: str
+    voltage: float = 5.0
+    source_id: Optional[str] = "V1"
+    circuit_state: Optional[Dict[str, Any]] = None
+
+class SupplyValidateRequest(BaseModel):
+    source_type: Optional[str] = "DC_VOLTAGE"
+    positive_node: Optional[str] = None
+    ground_node: Optional[str] = None
+    voltage: Optional[float] = 5.0
+    circuit_signature: Optional[str] = None
+    circuit_state: Optional[Dict[str, Any]] = None
+
+class SupplyClearRequest(BaseModel):
+    circuit_state: Optional[Dict[str, Any]] = None
 
 class CircuitIntelligenceRequest(BaseModel):
     image_base64: Optional[str] = None
@@ -184,6 +206,126 @@ async def analyze_image_endpoint(
         "imageMeta": api_res.get("image_meta", {})
     }
 
+# 1b. POST /api/circuit/photo-map (Phase 24.1 Photo to Verified Circuit Mapping Pipeline)
+@app.post("/api/circuit/photo-map")
+async def photo_map_circuit_endpoint(request: Request):
+    """
+    Submission MVP Pipeline (Phase 24.1):
+    ONE BREADBOARD PHOTO -> COMPONENT DETECTION -> TERMINAL DETECTION -> BREADBOARD HOLE MAPPING -> VERIFIED CIRCUIT STATE
+    """
+    from core.photo_circuit_pipeline import map_photo_to_circuit
+
+    content_type = request.headers.get("content-type", "")
+    image_input = None
+    mock_dets = None
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        uploaded_file = form.get("file") or form.get("image")
+        if uploaded_file and hasattr(uploaded_file, "read"):
+            image_input = await uploaded_file.read()
+    else:
+        try:
+            body = await request.json()
+            image_input = body.get("image") or body.get("image_base64") or body.get("image_bytes") or body.get("file")
+            mock_dets = body.get("mock_detections")
+        except Exception:
+            raw_body = await request.body()
+            if raw_body:
+                image_input = raw_body
+
+    if not image_input:
+        raise HTTPException(status_code=400, detail="Missing required image file upload or JSON 'image' / 'image_base64' payload.")
+
+    result = map_photo_to_circuit(image_input, mock_detections=mock_dets)
+    global _CURRENT_CIRCUIT_STATE
+    _CURRENT_CIRCUIT_STATE = result
+    return result
+
+# Module-level session state for active circuit and supply
+_CURRENT_CIRCUIT_STATE: Optional[Dict[str, Any]] = None
+
+# 1c. POST /api/circuit/supply/configure (Phase 24.2 Manual Supply Configuration)
+@app.post("/api/circuit/supply/configure")
+def configure_circuit_supply_endpoint(req: SupplyConfigureRequest):
+    from core.supply_configuration import configure_supply, validate_supply_configuration
+    global _CURRENT_CIRCUIT_STATE
+
+    target_state = req.circuit_state or _CURRENT_CIRCUIT_STATE
+    if not target_state:
+        target_state = {
+            "status": "READY",
+            "nodes": [req.positive_node, req.ground_node],
+            "components": [],
+            "connections": []
+        }
+
+    supply_info = configure_supply(
+        target_state,
+        positive_node=req.positive_node,
+        ground_node=req.ground_node,
+        voltage=req.voltage
+    )
+    _CURRENT_CIRCUIT_STATE = target_state
+
+    return {
+        "status": supply_info.get("status"),
+        "supply": supply_info,
+        "circuit_signature": target_state.get("circuit_signature", ""),
+        "circuit_state": target_state,
+        "simulation_ready": target_state.get("simulation_ready", False),
+        "simulation_readiness_reason": target_state.get("simulation_readiness_reason")
+    }
+
+# 1d. POST /api/circuit/supply/clear (Phase 24.2 Clear Supply Configuration)
+@app.post("/api/circuit/supply/clear")
+def clear_circuit_supply_endpoint(req: Optional[SupplyClearRequest] = None):
+    from core.supply_configuration import clear_supply_configuration
+    global _CURRENT_CIRCUIT_STATE
+
+    target_state = (req.circuit_state if req else None) or _CURRENT_CIRCUIT_STATE or {}
+    cleared = clear_supply_configuration(target_state)
+    _CURRENT_CIRCUIT_STATE = target_state
+
+    return {
+        "status": cleared.get("status"),
+        "supply": cleared,
+        "circuit_signature": target_state.get("circuit_signature", ""),
+        "circuit_state": target_state,
+        "simulation_ready": False
+    }
+
+# 1e. GET /api/circuit/supply (Phase 24.2 Get Active Supply Configuration)
+@app.get("/api/circuit/supply")
+def get_circuit_supply_endpoint():
+    from core.supply_configuration import get_supply_configuration
+    global _CURRENT_CIRCUIT_STATE
+
+    supply = get_supply_configuration(_CURRENT_CIRCUIT_STATE or {})
+    return {
+        "supply": supply,
+        "circuit_signature": _CURRENT_CIRCUIT_STATE.get("circuit_signature") if _CURRENT_CIRCUIT_STATE else None,
+        "simulation_ready": _CURRENT_CIRCUIT_STATE.get("simulation_ready", False) if _CURRENT_CIRCUIT_STATE else False
+    }
+
+# 1f. POST /api/circuit/supply/validate (Phase 24.2 Supply Validation Endpoint)
+@app.post("/api/circuit/supply/validate")
+def validate_circuit_supply_endpoint(req: SupplyValidateRequest):
+    from core.supply_configuration import validate_supply_configuration
+    global _CURRENT_CIRCUIT_STATE
+
+    target_state = req.circuit_state or _CURRENT_CIRCUIT_STATE or {}
+    val_res = validate_supply_configuration(
+        target_state,
+        positive_node=req.positive_node,
+        ground_node=req.ground_node,
+        voltage=req.voltage if req.voltage is not None else 5.0,
+        circuit_signature=req.circuit_signature
+    )
+    if not val_res.get("valid"):
+        return JSONResponse(status_code=400, content=val_res)
+    return val_res
+
 # 2. POST /api/detect-components (Phase 10 Real Component Detection)
 @app.post("/api/detect-components")
 def detect_components(req: ImageAnalysisRequest):
@@ -260,16 +402,75 @@ def analyze_circuit_endpoint(req: CircuitAnalysisRequest):
     res = run_dc_analysis(req.netlist)
     return format_solver_result(res, req.netlist)
 
-# 6. POST /api/circuit/simulate (Dedicated Transient Simulation Endpoint)
+# 6. POST /api/circuit/simulate (Phase 24.2 Manual Supply Simulation & Control)
 @app.post("/api/circuit/simulate")
 def simulate_circuit_endpoint(req: CircuitSimulateRequest):
-    if not req.netlist:
-        raise HTTPException(status_code=400, detail="Missing required netlist dictionary.")
+    from core.supply_configuration import (
+        run_deterministic_mna_simulation,
+        configure_supply,
+        validate_supply_configuration,
+        STATUS_BLOCKED,
+        REASON_SUPPLY_REQUIRED
+    )
+    global _CURRENT_CIRCUIT_STATE
 
-    dur = req.duration or 0.01
-    dt = req.timestep or 0.0001
-    res = run_transient_analysis(req.netlist, duration=dur, timestep=dt)
-    return res
+    # Legacy transient simulation passthrough if specifically requested with netlist
+    if req.simulation_mode == "transient" and req.netlist and not req.circuit_state and not req.supply:
+        dur = req.duration or 0.01
+        dt = req.timestep or 0.0001
+        return run_transient_analysis(req.netlist, duration=dur, timestep=dt)
+
+    # 1. Resolve active circuit state
+    if req.circuit_state:
+        circuit = req.circuit_state
+        if not circuit.get("supply") and _CURRENT_CIRCUIT_STATE and _CURRENT_CIRCUIT_STATE.get("supply"):
+            circuit["supply"] = _CURRENT_CIRCUIT_STATE["supply"]
+            if _CURRENT_CIRCUIT_STATE.get("circuit_signature"):
+                circuit["circuit_signature"] = _CURRENT_CIRCUIT_STATE["circuit_signature"]
+    elif req.netlist and "components" in req.netlist and any("terminals" in c for c in req.netlist.get("components", [])):
+        circuit = req.netlist
+    elif _CURRENT_CIRCUIT_STATE is not None:
+        circuit = _CURRENT_CIRCUIT_STATE
+    elif req.netlist:
+        circuit = {
+            "status": "READY",
+            "components": req.netlist.get("components", []),
+            "nodes": req.netlist.get("nodes", []),
+            "circuit_signature": req.netlist.get("circuit_id", "sim_circuit"),
+            "supply": req.supply or req.netlist.get("power_source")
+        }
+    else:
+        blocked_res = {
+            "status": STATUS_BLOCKED,
+            "circuit_signature": "",
+            "reason": REASON_SUPPLY_REQUIRED,
+            "detail": "No circuit state or netlist available for simulation."
+        }
+        return JSONResponse(status_code=400, content=blocked_res)
+
+    # Apply supply if provided in request payload
+    if req.supply:
+        configure_supply(
+            circuit,
+            positive_node=req.supply.get("positive_node"),
+            ground_node=req.supply.get("ground_node"),
+            voltage=req.supply.get("voltage", 5.0)
+        )
+
+    # 2. Execute deterministic MNA simulation with safety gating
+    sim_result = run_deterministic_mna_simulation(
+        circuit,
+        expected_signature=req.expected_signature,
+        simulation_mode=req.simulation_mode,
+        duration=req.duration,
+        timestep=req.timestep
+    )
+
+    if sim_result.get("status") == STATUS_BLOCKED:
+        return JSONResponse(status_code=400, content=sim_result)
+
+    _CURRENT_CIRCUIT_STATE = circuit
+    return sim_result
 
 # 6b. POST /api/camera/analyze (Live Camera Digital Twin Tracking Endpoint)
 @app.post("/api/camera/analyze")
@@ -723,6 +924,66 @@ def get_validation_report():
         "total_cases": len(cases),
         "physical_validation_status": "NOT PERFORMED"
     }
+
+
+# ---------------------------------------------------------------------------
+# PHASE 23: REAL HARDWARE VALIDATION & ACCURACY CALIBRATION ENDPOINTS
+# ---------------------------------------------------------------------------
+from validation.ground_truth_schema import (
+    get_all_standard_scenarios,
+    create_single_resistor_scenario,
+    create_resistor_led_series_scenario,
+    create_resistor_led_parallel_scenario,
+    create_voltage_divider_scenario,
+    create_jumper_wire_node_merge_scenario,
+    GroundTruthCircuit
+)
+from validation.physical_validation import validate_physical_circuit
+
+
+@app.get("/api/validation/phase23/scenarios")
+def get_phase23_scenarios():
+    """Returns the 5 standard hardware validation scenarios."""
+    scenarios = get_all_standard_scenarios()
+    return {
+        "count": len(scenarios),
+        "scenarios": [s.to_dict() for s in scenarios]
+    }
+
+
+@app.get("/api/validation/phase23/scenarios/{scenario_id}")
+def get_phase23_scenario_by_id(scenario_id: str):
+    """Returns a single scenario by ID."""
+    scenarios = get_all_standard_scenarios()
+    s = next((sc for sc in scenarios if sc.circuit_id.lower() == scenario_id.lower()), None)
+    if not s:
+        raise HTTPException(status_code=404, detail=f"Scenario '{scenario_id}' not found.")
+    return s.to_dict()
+
+
+@app.post("/api/validation/phase23/validate")
+def run_phase23_validation(payload: Dict[str, Any]):
+    """
+    Validates a circuit pipeline state against ground truth.
+    Strictly enforces: never claim physical validation was performed unless an actual camera/physical circuit was tested.
+    """
+    scenario_id = payload.get("scenario_id")
+    gt_data = payload.get("ground_truth")
+    pipeline_data = payload.get("pipeline_data") or payload.get("pipeline_state") or {}
+    is_actual_hardware_test = bool(payload.get("is_actual_hardware_test", False))
+
+    if gt_data:
+        gt = GroundTruthCircuit.from_dict(gt_data)
+    elif scenario_id:
+        scenarios = get_all_standard_scenarios()
+        gt = next((sc for sc in scenarios if sc.circuit_id.lower() == scenario_id.lower()), None)
+        if not gt:
+            raise HTTPException(status_code=404, detail=f"Scenario '{scenario_id}' not found.")
+    else:
+        gt = create_single_resistor_scenario()
+
+    report = validate_physical_circuit(gt, pipeline_data, is_actual_hardware_test=is_actual_hardware_test)
+    return report
 
 
 # ===========================================================================

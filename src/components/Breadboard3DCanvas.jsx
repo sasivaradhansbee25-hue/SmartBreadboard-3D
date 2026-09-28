@@ -12,11 +12,28 @@ import {
 } from '../utils/electricalAnimation';
 
 export default function Breadboard3DCanvas({ circuit: propCircuit }) {
-  const { setSelectedComponent, selectedComponent, measurements, simulation, simulationResult, solverStatus, solverError, activeCircuit } = useCircuit();
+  const {
+    setSelectedComponent,
+    selectedComponent,
+    measurements,
+    simulation,
+    simulationResult,
+    solverStatus,
+    solverError,
+    activeCircuit,
+    simulationStatus,
+    currentTransientSample,
+    currentTimeIndex
+  } = useCircuit();
   const circuit = propCircuit || activeCircuit;
   const mountRef = useRef(null);
   const controlsRef = useRef(null);
   const cameraRef = useRef(null);
+
+  const currentTransientSampleRef = useRef(currentTransientSample);
+  useEffect(() => {
+    currentTransientSampleRef.current = currentTransientSample;
+  }, [currentTransientSample]);
 
   const [selectedComp, setSelectedComp] = useState(null);
 
@@ -425,6 +442,68 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
       const cid = (comp.id || '').toUpperCase();
       const cdes = (comp.designator || '').toUpperCase();
 
+      // Phase 24.4 / 25: Absolute priority to active transient timeline sample (via live ref)
+      const activeSample = currentTransientSampleRef?.current || currentTransientSample;
+      if (activeSample) {
+        const tCurr = activeSample.componentCurrents?.[cdes] ?? activeSample.componentCurrents?.[cid] ?? activeSample.componentCurrents?.[comp.id] ?? activeSample.componentCurrents?.[comp.designator];
+        const tVolt = activeSample.componentVoltages?.[cdes] ?? activeSample.componentVoltages?.[cid] ?? activeSample.componentVoltages?.[comp.id] ?? activeSample.componentVoltages?.[comp.designator];
+        const tPow = activeSample.componentPower?.[cdes] ?? activeSample.componentPower?.[cid] ?? activeSample.componentPower?.[comp.id] ?? activeSample.componentPower?.[comp.designator];
+        if (tCurr !== undefined || tVolt !== undefined || tPow !== undefined) {
+          const cCurr = typeof tCurr === 'number' ? tCurr : 0;
+          const cVolt = typeof tVolt === 'number' ? tVolt : 0;
+          const cPow = typeof tPow === 'number' ? tPow : Math.abs(cVolt * cCurr);
+          return {
+            voltage: Math.abs(cVolt),
+            voltage_drop: cVolt,
+            current: cCurr,
+            power: cPow,
+            direction: cCurr >= 0 ? 'pin1_to_pin2' : 'pin2_to_pin1',
+            state: Math.abs(cCurr) > 1e-4 ? 'ACTIVE' : (Math.abs(cVolt) > 0.01 ? 'CHARGED' : 'STEADY')
+          };
+        }
+      }
+
+      // Phase 24.2 structured simulation results
+      if (simRes?.results) {
+        const resMeas = simRes.results.measurements?.[cdes] || simRes.results.measurements?.[cid] || simRes.results.measurements?.[comp.id] || simRes.results.measurements?.[comp.designator];
+        const resCurr = simRes.results.branch_currents?.[cdes] ?? simRes.results.branch_currents?.[cid] ?? simRes.results.branch_currents?.[comp.id] ?? simRes.results.branch_currents?.[comp.designator];
+        const resPow = simRes.results.component_power?.[cdes] ?? simRes.results.component_power?.[cid] ?? simRes.results.component_power?.[comp.id] ?? simRes.results.component_power?.[comp.designator];
+        if (resMeas || resCurr !== undefined || resPow !== undefined) {
+          return {
+            voltage: resMeas?.voltage_drop ?? resMeas?.voltage,
+            voltage_drop: resMeas?.voltage_drop,
+            current: resCurr ?? resMeas?.current ?? 0,
+            power: resPow ?? resMeas?.power ?? 0,
+            direction: resMeas?.direction ?? (resCurr > 0 ? 'pin1_to_pin2' : 'unknown'),
+            state: resMeas?.state ?? (Math.abs(resCurr || 0) > 1e-4 ? 'ACTIVE' : 'OFF'),
+            forward_voltage: resMeas?.voltage_drop
+          };
+        }
+      }
+
+      // Phase 24.2 / 24.3 top-level component dictionaries (component_currents, component_voltages, component_power)
+      if (simRes?.component_currents || simRes?.component_voltages) {
+        const rawCurr = simRes.component_currents?.[cdes] ?? simRes.component_currents?.[cid] ?? simRes.component_currents?.[comp.id] ?? simRes.component_currents?.[comp.designator];
+        const rawVolt = simRes.component_voltages?.[cdes] ?? simRes.component_voltages?.[cid] ?? simRes.component_voltages?.[comp.id] ?? simRes.component_voltages?.[comp.designator];
+        const rawPow = simRes.component_power?.[cdes] ?? simRes.component_power?.[cid] ?? simRes.component_power?.[comp.id] ?? simRes.component_power?.[comp.designator];
+
+        const tIdx = currentTimeIndex ?? 0;
+        const cCurr = Array.isArray(rawCurr) ? rawCurr[tIdx] : rawCurr;
+        const cVolt = Array.isArray(rawVolt) ? rawVolt[tIdx] : rawVolt;
+        const cPow = Array.isArray(rawPow) ? rawPow[tIdx] : rawPow;
+
+        if (cCurr !== undefined || cVolt !== undefined || cPow !== undefined) {
+          return {
+            voltage: cVolt !== undefined ? Math.abs(cVolt) : 0,
+            voltage_drop: cVolt ?? 0,
+            current: cCurr ?? 0,
+            power: cPow ?? ((cVolt !== undefined && cCurr !== undefined) ? Math.abs(cVolt * cCurr) : 0),
+            direction: (cCurr || 0) >= 0 ? 'pin1_to_pin2' : 'pin2_to_pin1',
+            state: Math.abs(cCurr || 0) > 1e-4 ? 'ACTIVE' : (Math.abs(cVolt || 0) > 0.01 ? 'CHARGED' : 'STEADY')
+          };
+        }
+      }
+
       // 1. Match from normalized simulationResult.components
       if (simRes?.components && Array.isArray(simRes.components)) {
         const item = simRes.components.find(c => {
@@ -493,7 +572,16 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
         for (const c of circuitObj.components) {
           if (c.node1 === nodeId && (c.start_hole || c.hole1)) return c.start_hole || c.hole1;
           if (c.node2 === nodeId && (c.end_hole || c.hole2)) return c.end_hole || c.hole2;
+          if (Array.isArray(c.terminals)) {
+            const t = c.terminals.find(term => term.node === nodeId && term.hole);
+            if (t) return t.hole;
+          }
         }
+      }
+      // 2b. Check connections (Phase 24.1 / 24.2)
+      if (circuitObj?.connections && Array.isArray(circuitObj.connections)) {
+        const conn = circuitObj.connections.find(c => c.node_id === nodeId && c.hole);
+        if (conn) return conn.hole;
       }
       // 3. Check wires
       if (circuitObj?.wires && Array.isArray(circuitObj.wires)) {
@@ -735,7 +823,7 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
         );
 
       const elec = matchSimulationElectrical(component, simulationResult, measurements);
-      const isSolved = (simulationResult?.solver_status === 'SOLVED' || solverStatus === 'SOLVED');
+      const isSolved = (simulationStatus === 'SOLVED' || simulationResult?.status === 'SOLVED' || simulationResult?.solver_status === 'SOLVED' || solverStatus === 'SOLVED');
 
       // LED 3D Visual State (ON: intense glow, OFF: unlit, REVERSE: warning amber, UNKNOWN: neutral)
       let glowIntensity = 0.6;
@@ -954,6 +1042,14 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
       body.userData = buildDigitalTwinUserData(component, 'capacitor', hole1, hole2);
 
       clickableObjects.push(body);
+      animatedComponents.push({
+        comp: component,
+        compId: component.id || component.designator,
+        compType: 'capacitor',
+        mesh: body,
+        material: body.material,
+        currentEmissive: 0.0
+      });
 
       scene.add(group);
     }
@@ -1014,6 +1110,14 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
       core.userData = buildDigitalTwinUserData(component, 'inductor', hole1, hole2);
 
       clickableObjects.push(core);
+      animatedComponents.push({
+        comp: component,
+        compId: component.id || component.designator,
+        compType: 'inductor',
+        mesh: core,
+        material: core.material,
+        currentEmissive: 0.0
+      });
       scene.add(group);
     }
 
@@ -1650,11 +1754,11 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
     // 3D ELECTRICAL VISUALIZATION OVERLAYS
     // =========================================================
 
-    const isSolved = (solverStatus === 'SOLVED' || simulationResult?.solver_status === 'SOLVED');
+    const isSolved = (simulationStatus === 'SOLVED' || simulationResult?.status === 'SOLVED' || solverStatus === 'SOLVED' || simulationResult?.solver_status === 'SOLVED');
 
     // 1. 3D Node Voltages Group
     const nodeVoltagesGroup = new THREE.Group();
-    const nodeVoltages = simulationResult?.node_voltages || {};
+    const nodeVoltages = simulationResult?.results?.node_voltages || simulationResult?.node_voltages || {};
     const renderedHoles = new Set();
 
     Object.entries(nodeVoltages).forEach(([nodeId, voltage]) => {
@@ -1900,7 +2004,7 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
 
       const time = performance.now() * 0.001;
       const faultState = checkCircuitFaultState(circuit, simulationResult, solverStatus, solverError);
-      const isSolved = (solverStatus === 'SOLVED' || simulationResult?.solver_status === 'SOLVED') && !faultState.isFault;
+      const isSolved = (simulationStatus === 'SOLVED' || simulationResult?.status === 'SOLVED' || solverStatus === 'SOLVED' || simulationResult?.solver_status === 'SOLVED') && !faultState.isFault;
 
       // 1. Animate current flow particles along electrical paths (wires and components)
       if (particleGroups && particleGroups.length > 0) {
@@ -2180,7 +2284,33 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
       ? Object.keys(simulationResult.node_voltages).length
       : (circuit?.nets?.length || 0);
 
-  const isSolved = (solverStatus === 'SOLVED' || simulationResult?.solver_status === 'SOLVED');
+  const isSolved = (simulationStatus === 'SOLVED' || simulationResult?.status === 'SOLVED' || solverStatus === 'SOLVED' || simulationResult?.solver_status === 'SOLVED');
+
+  const activeSelectedElectrical = React.useMemo(() => {
+    if (!selectedComp) return null;
+    const cid = (selectedComp.id || '').toUpperCase();
+    const cdes = (selectedComp.designator || '').toUpperCase();
+    if (currentTransientSample) {
+      const tCurr = currentTransientSample.componentCurrents?.[cdes] ?? currentTransientSample.componentCurrents?.[cid] ?? currentTransientSample.componentCurrents?.[selectedComp.id];
+      const tVolt = currentTransientSample.componentVoltages?.[cdes] ?? currentTransientSample.componentVoltages?.[cid] ?? currentTransientSample.componentVoltages?.[selectedComp.id];
+      const tPow = currentTransientSample.componentPower?.[cdes] ?? currentTransientSample.componentPower?.[cid] ?? currentTransientSample.componentPower?.[selectedComp.id];
+      if (tCurr !== undefined || tVolt !== undefined || tPow !== undefined) {
+        const cCurr = typeof tCurr === 'number' ? tCurr : 0;
+        const cVolt = typeof tVolt === 'number' ? tVolt : 0;
+        const cPow = typeof tPow === 'number' ? tPow : Math.abs(cVolt * cCurr);
+        return {
+          voltage: Math.abs(cVolt),
+          voltage_drop: cVolt,
+          current: cCurr,
+          power: cPow,
+          direction: cCurr >= 0 ? 'pin1_to_pin2' : 'pin2_to_pin1',
+          state: Math.abs(cCurr) > 1e-4 ? 'ACTIVE' : (Math.abs(cVolt) > 0.01 ? 'CHARGED' : 'STEADY'),
+          forward_voltage: Math.abs(cVolt)
+        };
+      }
+    }
+    return selectedComp.electrical || null;
+  }, [selectedComp, currentTransientSample]);
 
   return (
     <div
@@ -2510,35 +2640,46 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
             marginTop: '0.2rem'
           }}>
             {isSolved ? (
-              selectedComp.electrical ? (
+              activeSelectedElectrical ? (
                 <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', alignItems: 'center' }}>
                   {/* Resistor Readout */}
                   {selectedComp.type === 'resistor' && (
                     <>
-                      <span>Voltage Drop: <strong style={{ color: '#10b981' }}>{formatVoltage(selectedComp.electrical.voltage)}</strong></span>
-                      <span>Current: <strong style={{ color: '#fbbf24' }}>{formatCurrent(selectedComp.electrical.current)}</strong></span>
-                      <span>Power Dissipation: <strong style={{ color: '#f43f5e' }}>{formatPower(selectedComp.electrical.power)}</strong></span>
-                      <span>Current Direction: <strong style={{ color: '#38bdf8' }}>{selectedComp.electrical.direction || 'pin1_to_pin2'}</strong></span>
+                      <span>Voltage Drop: <strong style={{ color: '#10b981' }}>{formatVoltage(activeSelectedElectrical.voltage)}</strong></span>
+                      <span>Current: <strong style={{ color: '#fbbf24' }}>{formatCurrent(activeSelectedElectrical.current)}</strong></span>
+                      <span>Power Dissipation: <strong style={{ color: '#f43f5e' }}>{formatPower(activeSelectedElectrical.power)}</strong></span>
+                      <span>Current Direction: <strong style={{ color: '#38bdf8' }}>{activeSelectedElectrical.direction || 'pin1_to_pin2'}</strong></span>
+                    </>
+                  )}
+
+                  {/* Inductor Readout */}
+                  {selectedComp.type === 'inductor' && (
+                    <>
+                      <span>Voltage: <strong style={{ color: '#10b981' }}>{formatVoltage(activeSelectedElectrical.voltage)}</strong></span>
+                      <span>Current: <strong style={{ color: '#fbbf24' }}>{formatCurrent(activeSelectedElectrical.current)}</strong></span>
+                      <span>Power: <strong style={{ color: '#f43f5e' }}>{formatPower(activeSelectedElectrical.power)}</strong></span>
+                      <span>Inductance: <strong style={{ color: '#38bdf8' }}>{selectedComp.displayValue || selectedComp.formatted_value || `${selectedComp.value || 0} H`}</strong></span>
                     </>
                   )}
 
                   {/* LED Readout */}
                   {selectedComp.type === 'led' && (
                     <>
-                      <span>Forward Voltage: <strong style={{ color: '#10b981' }}>{formatVoltage(selectedComp.electrical.forward_voltage ?? selectedComp.electrical.voltage)}</strong></span>
-                      <span>Current: <strong style={{ color: '#fbbf24' }}>{formatCurrent(selectedComp.electrical.current)}</strong></span>
-                      <span>Power: <strong style={{ color: '#f43f5e' }}>{formatPower(selectedComp.electrical.power)}</strong></span>
-                      <span>State: <strong style={{ color: selectedComp.electrical.state === 'ON' ? '#10b981' : (selectedComp.electrical.state === 'REVERSE' ? '#f59e0b' : '#94a3b8') }}>{selectedComp.electrical.state || 'ON'}</strong></span>
-                      <span>Direction: <strong style={{ color: '#38bdf8' }}>{selectedComp.electrical.direction || 'FORWARD'}</strong></span>
+                      <span>Forward Voltage: <strong style={{ color: '#10b981' }}>{formatVoltage(activeSelectedElectrical.forward_voltage ?? activeSelectedElectrical.voltage)}</strong></span>
+                      <span>Current: <strong style={{ color: '#fbbf24' }}>{formatCurrent(activeSelectedElectrical.current)}</strong></span>
+                      <span>Power: <strong style={{ color: '#f43f5e' }}>{formatPower(activeSelectedElectrical.power)}</strong></span>
+                      <span>State: <strong style={{ color: activeSelectedElectrical.state === 'ON' ? '#10b981' : (activeSelectedElectrical.state === 'REVERSE' ? '#f59e0b' : '#94a3b8') }}>{activeSelectedElectrical.state || 'ON'}</strong></span>
+                      <span>Direction: <strong style={{ color: '#38bdf8' }}>{activeSelectedElectrical.direction || 'FORWARD'}</strong></span>
                     </>
                   )}
 
                   {/* Capacitor Readout */}
                   {selectedComp.type === 'capacitor' && (
                     <>
-                      <span>Voltage: <strong style={{ color: '#10b981' }}>{formatVoltage(selectedComp.electrical.voltage)}</strong></span>
-                      <span>Current: <strong style={{ color: '#fbbf24' }}>{formatCurrent(selectedComp.electrical.current)}</strong></span>
-                      <span>Charge: <strong style={{ color: '#38bdf8' }}>{selectedComp.electrical.charge !== undefined ? `${(selectedComp.electrical.charge * 1e6).toFixed(2)} µC` : 'N/A'}</strong></span>
+                      <span>Voltage: <strong style={{ color: '#10b981' }}>{formatVoltage(activeSelectedElectrical.voltage)}</strong></span>
+                      <span>Current: <strong style={{ color: '#fbbf24' }}>{formatCurrent(activeSelectedElectrical.current)}</strong></span>
+                      <span>Power: <strong style={{ color: '#f43f5e' }}>{formatPower(activeSelectedElectrical.power)}</strong></span>
+                      <span>Capacitance: <strong style={{ color: '#38bdf8' }}>{selectedComp.displayValue || selectedComp.formatted_value || `${selectedComp.value || 0} F`}</strong></span>
                     </>
                   )}
 
@@ -2546,20 +2687,20 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
                   {selectedComp.type === 'wire' && (
                     <>
                       <span>Net: <strong style={{ color: '#38bdf8' }}>{selectedComp.node1 || selectedComp.net || 'N/A'}</strong></span>
-                      <span>Current: <strong style={{ color: '#fbbf24' }}>{formatCurrent(selectedComp.electrical.current)}</strong></span>
-                      <span>Voltage Drop: <strong style={{ color: '#10b981' }}>{selectedComp.electrical.voltage_difference !== undefined ? `${selectedComp.electrical.voltage_difference} V` : '0.00 V'}</strong></span>
+                      <span>Current: <strong style={{ color: '#fbbf24' }}>{formatCurrent(activeSelectedElectrical.current)}</strong></span>
+                      <span>Voltage Drop: <strong style={{ color: '#10b981' }}>{activeSelectedElectrical.voltage_difference !== undefined ? `${activeSelectedElectrical.voltage_difference} V` : '0.00 V'}</strong></span>
                     </>
                   )}
 
                   {/* Generic Diode / Other Component Readout */}
-                  {selectedComp.type !== 'resistor' && selectedComp.type !== 'led' && selectedComp.type !== 'capacitor' && selectedComp.type !== 'wire' && (
+                  {selectedComp.type !== 'resistor' && selectedComp.type !== 'inductor' && selectedComp.type !== 'led' && selectedComp.type !== 'capacitor' && selectedComp.type !== 'wire' && (
                     <>
-                      <span>Voltage: <strong style={{ color: '#10b981' }}>{formatVoltage(selectedComp.electrical.voltage)}</strong></span>
-                      <span>Current: <strong style={{ color: '#fbbf24' }}>{formatCurrent(selectedComp.electrical.current)}</strong></span>
-                      {selectedComp.electrical.power !== undefined && (
-                        <span>Power: <strong style={{ color: '#f43f5e' }}>{formatPower(selectedComp.electrical.power)}</strong></span>
+                      <span>Voltage: <strong style={{ color: '#10b981' }}>{formatVoltage(activeSelectedElectrical.voltage)}</strong></span>
+                      <span>Current: <strong style={{ color: '#fbbf24' }}>{formatCurrent(activeSelectedElectrical.current)}</strong></span>
+                      {activeSelectedElectrical.power !== undefined && (
+                        <span>Power: <strong style={{ color: '#f43f5e' }}>{formatPower(activeSelectedElectrical.power)}</strong></span>
                       )}
-                      <span>State: <strong style={{ color: '#38bdf8' }}>{selectedComp.electrical.state || 'ACTIVE'}</strong></span>
+                      <span>State: <strong style={{ color: '#38bdf8' }}>{activeSelectedElectrical.state || 'ACTIVE'}</strong></span>
                     </>
                   )}
                 </div>

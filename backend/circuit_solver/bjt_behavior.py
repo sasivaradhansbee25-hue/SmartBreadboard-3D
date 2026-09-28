@@ -131,6 +131,9 @@ def extract_bjt_metrics(
     active_pct = float(100.0 * active_count / max(n_pts, 1))
     sat_pct = float(100.0 * sat_count / max(n_pts, 1))
 
+    if active_pct >= 20.0:
+        op_region = "FORWARD_ACTIVE"
+
     # Forced beta calculation (IC / IB)
     beta_forced = float(abs(ic_fin) / max(abs(ib_fin), 1e-12)) if abs(ib_fin) > 1e-9 else 0.0
 
@@ -201,7 +204,7 @@ def classify_bjt_topology(
     - UNSUPPORTED
     """
     components, sources, nodes_dict = parse_circuit_netlist(netlist)
-    bjts = [c for c in components if c.type.lower() in ["bjt", "transistor", "npn", "pnp"]]
+    bjts = [c for c in components if c.type.lower() in ["bjt", "transistor", "npn", "pnp", "bjt_npn", "bjt_pnp"]]
     resistors = [c for c in components if c.type.lower() in ["resistor", "res"]]
 
     if not bjts:
@@ -477,7 +480,7 @@ def _generate_bjt_explanation(
         text = (
             f"The simulation indicates FORWARD-ACTIVE operation: the base-emitter junction is forward biased "
             f"(V_BE = {vbe:.3f} V) while the base-collector junction remains reverse biased (V_CE = {vce:.2f} V). "
-            f"Small base current ({ib_uA:.2f} µA) controls a large collector current ({ic_mA:.2f} mA) with effective gain β ≈ {beta:.1f}."
+            f"Small base current ({ib_uA:.2f} µA) controls a large collector current ({ic_mA:.2f} mA) with effective gain beta ~ {beta:.1f}."
         )
     elif region == "SATURATION":
         text = (

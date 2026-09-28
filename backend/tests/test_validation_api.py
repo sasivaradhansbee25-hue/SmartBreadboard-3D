@@ -79,6 +79,54 @@ class TestValidationAPI(unittest.TestCase):
         self.assertIn("Physical Validation & Reliability Report", data["markdown"])
         self.assertEqual(data["physical_validation_status"], "NOT PERFORMED")
 
+    def test_07_phase23_scenarios_endpoint(self):
+        resp = self.client.get("/api/validation/phase23/scenarios")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["count"], 5)
+        scenario_ids = [s["circuit_id"] for s in data["scenarios"]]
+        self.assertIn("SCENARIO-1-SINGLE-RESISTOR", scenario_ids)
+        self.assertIn("SCENARIO-2-RESISTOR-LED-SERIES", scenario_ids)
+        self.assertIn("SCENARIO-3-RESISTOR-LED-PARALLEL", scenario_ids)
+        self.assertIn("SCENARIO-4-VOLTAGE-DIVIDER", scenario_ids)
+        self.assertIn("SCENARIO-5-JUMPER-WIRE-MERGE", scenario_ids)
+
+    def test_08_phase23_scenario_single_endpoint(self):
+        resp = self.client.get("/api/validation/phase23/scenarios/SCENARIO-1-SINGLE-RESISTOR")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["circuit_id"], "SCENARIO-1-SINGLE-RESISTOR")
+        self.assertEqual(data["name"], "Single Resistor")
+
+    def test_09_phase23_validate_endpoint(self):
+        payload = {
+            "scenario_id": "SCENARIO-1-SINGLE-RESISTOR",
+            "pipeline_data": {
+                "components": [{"id": "R1", "type": "resistor", "start_hole": "A10", "end_hole": "A15", "status": "VERIFIED"}],
+                "hole_mapping": {"R1": ["A10", "A15"]},
+                "topology": {
+                    "pattern": "SINGLE_COMPONENT",
+                    "nodes": [
+                        {"id": "N1", "connected_pins": ["R1.1", "POWER_PLUS"]},
+                        {"id": "N2", "connected_pins": ["R1.2", "POWER_MINUS"]}
+                    ]
+                },
+                "simulation_result": {
+                    "status": "SOLVED",
+                    "node_voltages": {"NODE_VCC": 5.0, "NODE_GND": 0.0},
+                    "branch_currents": {"R1": 5.0}
+                },
+                "ar_grounding_state": {"tracking": "ACTIVE", "registration": "ACTIVE"}
+            },
+            "is_actual_hardware_test": False
+        }
+        resp = self.client.post("/api/validation/phase23/validate", json=payload)
+        self.assertEqual(resp.status_code, 200)
+        report = resp.json()
+        self.assertEqual(report["accuracy_percentage"], 100.0)
+        self.assertEqual(report["physical_validation_status"], "NOT PERFORMED (SYNTHETIC BENCHMARK)")
+        self.assertEqual(len(report["metrics_breakdown"]), 9)
+
 
 if __name__ == "__main__":
     unittest.main()

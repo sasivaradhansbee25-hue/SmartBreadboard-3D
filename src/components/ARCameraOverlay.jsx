@@ -48,6 +48,8 @@ export default function ARCameraOverlay({
   const {
     activeCircuit,
     simulationResult,
+    simulationStatus,
+    simulationSignature,
     measurements,
     solverStatus,
     solverError,
@@ -62,7 +64,9 @@ export default function ARCameraOverlay({
     resetDigitalChanges,
     canUndo,
     canRedo,
-    circuitIntelligence
+    circuitIntelligence,
+    currentTransientSample,
+    currentTimeIndex
   } = useCircuit();
 
   // AR Layer Feature Toggles
@@ -78,11 +82,59 @@ export default function ARCameraOverlay({
   const animFrameRef = useRef(null);
   const particleOffsetRef = useRef(0);
 
-  // Match normalized electrical data for a component
+  // Match normalized electrical data for a component with strict freshness gating (Phase 24.2 / 24.4)
   const getComponentElectrical = useCallback((comp) => {
     if (!comp) return null;
+
+    // Strict Freshness Check per Phase 24.2 Rule:
+    // Only show values when simulation_signature === current_circuit_signature
+    // Never show stale simulation values.
+    const currentSig = activeCircuit?.circuit_signature;
+    const simSig = simulationSignature || simulationResult?.simulation_signature || simulationResult?.circuit_signature;
+    if (!simSig || !currentSig || simSig !== currentSig) {
+      return null;
+    }
+
     const cid = (comp.id || '').toUpperCase();
     const cdes = (comp.designator || '').toUpperCase();
+
+    // 0. Phase 24.4: Priority to active transient timeline sample
+    if (currentTransientSample) {
+      const tCurr = currentTransientSample.componentCurrents?.[cdes] ?? currentTransientSample.componentCurrents?.[cid] ?? currentTransientSample.componentCurrents?.[comp.id] ?? currentTransientSample.componentCurrents?.[comp.designator];
+      const tVolt = currentTransientSample.componentVoltages?.[cdes] ?? currentTransientSample.componentVoltages?.[cid] ?? currentTransientSample.componentVoltages?.[comp.id] ?? currentTransientSample.componentVoltages?.[comp.designator];
+      const tPow = currentTransientSample.componentPower?.[cdes] ?? currentTransientSample.componentPower?.[cid] ?? currentTransientSample.componentPower?.[comp.id] ?? currentTransientSample.componentPower?.[comp.designator];
+      if (tCurr !== undefined || tVolt !== undefined || tPow !== undefined) {
+        const cCurr = typeof tCurr === 'number' ? tCurr : 0;
+        const cVolt = typeof tVolt === 'number' ? tVolt : 0;
+        const cPow = typeof tPow === 'number' ? tPow : Math.abs(cVolt * cCurr);
+        return {
+          voltage: Math.abs(cVolt),
+          voltage_drop: cVolt,
+          current: cCurr,
+          power: cPow,
+          direction: cCurr >= 0 ? 'pin1_to_pin2' : 'pin2_to_pin1',
+          state: Math.abs(cCurr) > 1e-4 ? 'ACTIVE' : (Math.abs(cVolt) > 0.01 ? 'CHARGED' : 'STEADY'),
+          forward_voltage: Math.abs(cVolt)
+        };
+      }
+    }
+
+    // 1. Check Phase 24.2 structured simulation results
+    if (simulationResult?.results) {
+      const resMeas = simulationResult.results.measurements?.[cdes] || simulationResult.results.measurements?.[cid] || simulationResult.results.measurements?.[comp.id] || simulationResult.results.measurements?.[comp.designator];
+      const resCurr = simulationResult.results.branch_currents?.[cdes] ?? simulationResult.results.branch_currents?.[cid] ?? simulationResult.results.branch_currents?.[comp.id] ?? simulationResult.results.branch_currents?.[comp.designator];
+      const resPow = simulationResult.results.component_power?.[cdes] ?? simulationResult.results.component_power?.[cid] ?? simulationResult.results.component_power?.[comp.id] ?? simulationResult.results.component_power?.[comp.designator];
+      if (resMeas || resCurr !== undefined || resPow !== undefined) {
+        return {
+          voltage: resMeas?.voltage_drop ?? resMeas?.voltage,
+          current: resCurr ?? resMeas?.current ?? 0,
+          power: resPow ?? resMeas?.power ?? 0,
+          direction: resMeas?.direction ?? (resCurr > 0 ? 'pin1_to_pin2' : 'unknown'),
+          state: resMeas?.state ?? (Math.abs(resCurr || 0) > 1e-4 ? 'ACTIVE' : 'OFF'),
+          forward_voltage: resMeas?.voltage_drop
+        };
+      }
+    }
 
     if (simulationResult?.components && Array.isArray(simulationResult.components)) {
       const match = simulationResult.components.find(c => {
@@ -115,7 +167,7 @@ export default function ARCameraOverlay({
     }
 
     return null;
-  }, [simulationResult, measurements]);
+  }, [simulationResult, simulationSignature, activeCircuit, measurements, currentTransientSample, currentTimeIndex]);
 
   // Main AR Canvas Render Loop
   const renderARScene = useCallback(() => {

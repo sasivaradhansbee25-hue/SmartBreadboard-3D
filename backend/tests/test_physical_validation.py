@@ -58,6 +58,33 @@ from validation.report_generator import (
     generate_validation_summary_report,
     export_validation_suite_json
 )
+from validation.ground_truth_schema import (
+    GroundTruthCircuit,
+    GroundTruthComponent,
+    GroundTruthWire,
+    GroundTruthTopology,
+    GroundTruthSimulationState,
+    Orientation,
+    TopologyPattern,
+    create_single_resistor_scenario,
+    create_resistor_led_series_scenario,
+    create_resistor_led_parallel_scenario,
+    create_voltage_divider_scenario,
+    create_jumper_wire_node_merge_scenario,
+    get_all_standard_scenarios
+)
+from validation.physical_validation import (
+    calculate_component_detection_accuracy,
+    calculate_component_classification_accuracy,
+    calculate_terminal_detection_accuracy,
+    calculate_hole_mapping_accuracy,
+    calculate_electrical_node_accuracy,
+    calculate_wire_detection_accuracy,
+    calculate_topology_accuracy,
+    calculate_simulation_consistency,
+    calculate_ar_grounding_consistency,
+    validate_physical_circuit
+)
 
 
 class TestPhysicalValidationFramework(unittest.TestCase):
@@ -231,6 +258,301 @@ class TestPhysicalValidationFramework(unittest.TestCase):
         json_out = export_validation_suite_json(benchmarks)
         self.assertIn("PHYS-001", json_out)
         self.assertIn("NOT_TESTED", json_out)
+
+    # 10. Ground truth schema completeness & integrity
+    def test_10_ground_truth_schema_support(self):
+        scenario = create_single_resistor_scenario()
+        # Verify supported fields
+        comp = scenario.components[0]
+        self.assertEqual(comp.id, "R1")
+        self.assertEqual(comp.type, "resistor")
+        self.assertEqual(comp.terminal_holes, ["A10", "A15"])
+        self.assertEqual(comp.orientation, Orientation.HORIZONTAL.value)
+        self.assertIn("terminal_1", comp.electrical_nodes)
+        self.assertIsNone(comp.measured_value)  # Never fabricated
+
+        # Verify wire support
+        wire_scenario = create_jumper_wire_node_merge_scenario()
+        wire = wire_scenario.jumper_wires[0]
+        self.assertEqual(wire.id, "W1")
+        self.assertEqual(wire.start_hole, "E15")
+        self.assertEqual(wire.end_hole, "E25")
+
+        # Verify topology & simulation state
+        self.assertEqual(scenario.topology.pattern, TopologyPattern.SINGLE_COMPONENT.value)
+        self.assertEqual(scenario.simulation_state.expected_status, "SOLVED")
+        self.assertEqual(scenario.simulation_state.expected_node_voltages["NODE_VCC"], 5.0)
+
+        # Serialization round-trip
+        data = scenario.to_dict()
+        reconstructed = GroundTruthCircuit.from_dict(data)
+        self.assertEqual(reconstructed.circuit_id, scenario.circuit_id)
+        self.assertEqual(len(reconstructed.components), 1)
+
+    # 11. Test Scenario 1: Single resistor
+    def test_11_scenario_1_single_resistor(self):
+        gt = create_single_resistor_scenario()
+        pipeline_data = {
+            "components": [{"id": "R1", "type": "resistor", "start_hole": "A10", "end_hole": "A15", "status": "VERIFIED"}],
+            "hole_mapping": {"R1": ["A10", "A15"]},
+            "topology": {
+                "pattern": "SINGLE_COMPONENT",
+                "nodes": [
+                    {"id": "N1", "connected_pins": ["R1.1", "POWER_PLUS"]},
+                    {"id": "N2", "connected_pins": ["R1.2", "POWER_MINUS"]}
+                ]
+            },
+            "simulation_result": {
+                "status": "SOLVED",
+                "node_voltages": {"NODE_VCC": 5.0, "NODE_GND": 0.0},
+                "branch_currents": {"R1": 5.0}
+            },
+            "ar_grounding_state": {"tracking": "ACTIVE", "registration": "ACTIVE"}
+        }
+
+        report = validate_physical_circuit(gt, pipeline_data, is_actual_hardware_test=False)
+        self.assertEqual(report["circuit_id"], "SCENARIO-1-SINGLE-RESISTOR")
+        self.assertEqual(report["accuracy_percentage"], 100.0)
+        self.assertEqual(len(report["missing"]), 0)
+        self.assertEqual(len(report["failure_reason"]), 0)
+
+        # Missing component failure test
+        report_fail = validate_physical_circuit(gt, {"components": []})
+        self.assertIn("R1", report_fail["missing"])
+        self.assertLess(report_fail["accuracy_percentage"], 50.0)
+
+    # 12. Test Scenario 2: Resistor + LED series
+    def test_12_scenario_2_resistor_led_series(self):
+        gt = create_resistor_led_series_scenario()
+        pipeline_data = {
+            "components": [
+                {"id": "R1", "type": "resistor", "start_hole": "A10", "end_hole": "A15", "status": "VERIFIED"},
+                {"id": "LED1", "type": "led", "start_hole": "B15", "end_hole": "B20", "status": "VERIFIED"}
+            ],
+            "hole_mapping": {"R1": ["A10", "A15"], "LED1": ["B15", "B20"]},
+            "topology": {
+                "pattern": "SERIES",
+                "series_pairs": [["LED1", "R1"]],
+                "parallel_pairs": [],
+                "nodes": [
+                    {"id": "NODE_VCC", "connected_pins": ["R1.1"]},
+                    {"id": "NODE_MID", "connected_pins": ["R1.2", "LED1.anode"]},
+                    {"id": "NODE_GND", "connected_pins": ["LED1.cathode"]}
+                ]
+            },
+            "simulation_result": {
+                "status": "SOLVED",
+                "node_voltages": {"NODE_VCC": 5.0, "NODE_MID": 2.1, "NODE_GND": 0.0},
+                "branch_currents": {"R1": 13.18, "LED1": 13.18}
+            },
+            "ar_grounding_state": {"tracking": "ACTIVE", "registration": "ACTIVE"}
+        }
+
+        report = validate_physical_circuit(gt, pipeline_data)
+        self.assertEqual(report["accuracy_percentage"], 100.0)
+        self.assertEqual(report["metrics_breakdown"]["topology"]["accuracy_percentage"], 100.0)
+        self.assertEqual(report["metrics_breakdown"]["simulation_consistency"]["accuracy_percentage"], 100.0)
+
+    # 13. Test Scenario 3: Resistor + LED parallel
+    def test_13_scenario_3_resistor_led_parallel(self):
+        gt = create_resistor_led_parallel_scenario()
+        pipeline_data = {
+            "components": [
+                {"id": "R1", "type": "resistor", "start_hole": "A10", "end_hole": "A15", "status": "VERIFIED"},
+                {"id": "LED1", "type": "led", "start_hole": "C10", "end_hole": "C15", "status": "VERIFIED"}
+            ],
+            "hole_mapping": {"R1": ["A10", "A15"], "LED1": ["C10", "C15"]},
+            "topology": {
+                "pattern": "PARALLEL",
+                "series_pairs": [],
+                "parallel_pairs": [["LED1", "R1"]],
+                "nodes": [
+                    {"id": "NODE_VCC", "connected_pins": ["R1.1", "LED1.anode"]},
+                    {"id": "NODE_GND", "connected_pins": ["R1.2", "LED1.cathode"]}
+                ]
+            },
+            "simulation_result": {
+                "status": "SOLVED",
+                "node_voltages": {"NODE_VCC": 5.0, "NODE_GND": 0.0},
+                "branch_currents": {"R1": 5.0, "LED1": 20.0}
+            },
+            "ar_grounding_state": {"tracking": "ACTIVE", "registration": "ACTIVE"}
+        }
+
+        report = validate_physical_circuit(gt, pipeline_data)
+        self.assertEqual(report["accuracy_percentage"], 100.0)
+        self.assertEqual(report["metrics_breakdown"]["topology"]["accuracy_percentage"], 100.0)
+
+    # 14. Test Scenario 4: Voltage divider
+    def test_14_scenario_4_voltage_divider(self):
+        gt = create_voltage_divider_scenario()
+        pipeline_data = {
+            "components": [
+                {"id": "R1", "type": "resistor", "start_hole": "A10", "end_hole": "A15", "status": "VERIFIED"},
+                {"id": "R2", "type": "resistor", "start_hole": "B15", "end_hole": "B20", "status": "VERIFIED"}
+            ],
+            "hole_mapping": {"R1": ["A10", "A15"], "R2": ["B15", "B20"]},
+            "topology": {
+                "pattern": "VOLTAGE_DIVIDER",
+                "series_pairs": [["R1", "R2"]],
+                "nodes": [
+                    {"id": "NODE_VCC", "connected_pins": ["R1.1"]},
+                    {"id": "NODE_MID", "connected_pins": ["R1.2", "R2.1"]},
+                    {"id": "NODE_GND", "connected_pins": ["R2.2"]}
+                ]
+            },
+            "simulation_result": {
+                "status": "SOLVED",
+                "node_voltages": {"NODE_VCC": 5.0, "NODE_MID": 2.5, "NODE_GND": 0.0},
+                "branch_currents": {"R1": 0.25, "R2": 0.25}
+            },
+            "ar_grounding_state": {"tracking": "ACTIVE", "registration": "ACTIVE"}
+        }
+
+        report = validate_physical_circuit(gt, pipeline_data)
+        self.assertEqual(report["accuracy_percentage"], 100.0)
+        self.assertEqual(report["metrics_breakdown"]["simulation_consistency"]["accuracy_percentage"], 100.0)
+
+    # 15. Test Scenario 5: Jumper wire node merge
+    def test_15_scenario_5_jumper_wire_node_merge(self):
+        gt = create_jumper_wire_node_merge_scenario()
+        pipeline_data = {
+            "components": [
+                {"id": "R1", "type": "resistor", "start_hole": "A10", "end_hole": "A15", "status": "VERIFIED"},
+                {"id": "R2", "type": "resistor", "start_hole": "A25", "end_hole": "A30", "status": "VERIFIED"}
+            ],
+            "jumper_wires": [
+                {"id": "W1", "start_hole": "E15", "end_hole": "E25", "status": "VERIFIED"}
+            ],
+            "hole_mapping": {"R1": ["A10", "A15"], "R2": ["A25", "A30"]},
+            "topology": {
+                "pattern": "NODE_MERGE",
+                "series_pairs": [["R1", "R2"]],
+                "nodes": [
+                    {"id": "NODE_VCC", "connected_pins": ["R1.1"]},
+                    {"id": "NODE_MERGED", "connected_pins": ["R1.2", "W1.start", "W1.end", "R2.1"]},
+                    {"id": "NODE_GND", "connected_pins": ["R2.2"]}
+                ]
+            },
+            "simulation_result": {
+                "status": "SOLVED",
+                "node_voltages": {"NODE_VCC": 5.0, "NODE_MERGED": 2.5, "NODE_GND": 0.0},
+                "branch_currents": {"R1": 11.36, "R2": 11.36, "W1": 11.36}
+            },
+            "ar_grounding_state": {"tracking": "ACTIVE", "registration": "ACTIVE"}
+        }
+
+        report = validate_physical_circuit(gt, pipeline_data)
+        self.assertEqual(report["accuracy_percentage"], 100.0)
+        self.assertEqual(report["metrics_breakdown"]["wire_detection"]["accuracy_percentage"], 100.0)
+        self.assertEqual(report["metrics_breakdown"]["electrical_node"]["accuracy_percentage"], 100.0)
+
+    # 16. Verify all 9 separate accuracy metrics individually
+    def test_16_nine_separate_metrics_calculation(self):
+        gt = create_resistor_led_series_scenario()
+        sample_pipeline = {
+            "components": [
+                {"id": "R1", "type": "resistor", "start_hole": "A10", "end_hole": "A15", "status": "VERIFIED"},
+                {"id": "LED1", "type": "led", "start_hole": "B15", "end_hole": "B20", "status": "VERIFIED"}
+            ],
+            "hole_mapping": {"R1": ["A10", "A15"], "LED1": ["B15", "B20"]},
+            "topology": {
+                "pattern": "SERIES",
+                "series_pairs": [["R1", "LED1"]],
+                "nodes": [
+                    {"id": "NODE_VCC", "connected_pins": ["R1.1"]},
+                    {"id": "NODE_MID", "connected_pins": ["R1.2", "LED1.anode"]},
+                    {"id": "NODE_GND", "connected_pins": ["LED1.cathode"]}
+                ]
+            },
+            "simulation_result": {
+                "status": "SOLVED",
+                "node_voltages": {"NODE_VCC": 5.0, "NODE_MID": 2.1, "NODE_GND": 0.0},
+                "branch_currents": {"R1": 13.18, "LED1": 13.18}
+            },
+            "ar_grounding_state": {"tracking": "ACTIVE", "registration": "ACTIVE"}
+        }
+
+        m1 = calculate_component_detection_accuracy(gt, sample_pipeline)
+        m2 = calculate_component_classification_accuracy(gt, sample_pipeline)
+        m3 = calculate_terminal_detection_accuracy(gt, sample_pipeline)
+        m4 = calculate_hole_mapping_accuracy(gt, sample_pipeline)
+        m5 = calculate_electrical_node_accuracy(gt, sample_pipeline)
+        m6 = calculate_wire_detection_accuracy(gt, sample_pipeline)
+        m7 = calculate_topology_accuracy(gt, sample_pipeline)
+        m8 = calculate_simulation_consistency(gt, sample_pipeline)
+        m9 = calculate_ar_grounding_consistency(gt, sample_pipeline)
+
+        for m in [m1, m2, m3, m4, m5, m6, m7, m8, m9]:
+            self.assertIn("accuracy_percentage", m)
+            self.assertIn("matched", m)
+            self.assertIn("incorrect", m)
+            self.assertIn("missing", m)
+            self.assertIn("extra_detections", m)
+            self.assertEqual(m["accuracy_percentage"], 100.0)
+
+    # 17. Unknown and ambiguous marking tests
+    def test_17_unknown_and_ambiguous_marking(self):
+        gt = create_single_resistor_scenario()
+        ambiguous_pipeline = {
+            "components": [
+                {"id": "R1", "type": "UNKNOWN", "start_hole": "AMBIGUOUS", "end_hole": "A15", "status": "AMBIGUOUS"}
+            ],
+            "hole_mapping": {"R1": ["AMBIGUOUS", "A15"]},
+            "topology": {"pattern": "AMBIGUOUS", "nodes": []},
+            "simulation_result": {"status": "ERROR"},
+            "ar_grounding_state": {"tracking": "UNKNOWN"}
+        }
+
+        report = validate_physical_circuit(gt, ambiguous_pipeline)
+        self.assertTrue(any("ambiguous" in r.lower() or "unknown" in r.lower() for r in report["failure_reason"]))
+        # Never fabricate missing measurements: simulation accuracy must be 0 when error
+        self.assertEqual(report["metrics_breakdown"]["simulation_consistency"]["accuracy_percentage"], 0.0)
+
+    # 18. Validation report structure verification
+    def test_18_validation_report_structure(self):
+        gt = create_single_resistor_scenario()
+        report = validate_physical_circuit(gt, {})
+        
+        required_keys = [
+            "expected", "detected", "matched", "incorrect",
+            "missing", "extra_detections", "accuracy_percentage", "failure_reason"
+        ]
+        for key in required_keys:
+            self.assertIn(key, report)
+
+        self.assertIn("metrics_breakdown", report)
+        self.assertEqual(len(report["metrics_breakdown"]), 9)
+
+    # 19. Hardware validation status confirmation gate
+    def test_19_physical_validation_status_gate(self):
+        gt_synthetic = create_single_resistor_scenario()
+        # Synthetic run without real hardware test
+        rep1 = validate_physical_circuit(gt_synthetic, {}, is_actual_hardware_test=False)
+        self.assertEqual(rep1["physical_validation_status"], "NOT PERFORMED (SYNTHETIC BENCHMARK)")
+
+        # Real hardware test flag simulation
+        gt_real = create_single_resistor_scenario()
+        gt_real.is_physical_test = True
+        pipeline_perfect = {
+            "components": [{"id": "R1", "type": "resistor", "start_hole": "A10", "end_hole": "A15", "status": "VERIFIED"}],
+            "hole_mapping": {"R1": ["A10", "A15"]},
+            "topology": {
+                "pattern": "SINGLE_COMPONENT",
+                "nodes": [
+                    {"id": "N1", "connected_pins": ["R1.1", "POWER_PLUS"]},
+                    {"id": "N2", "connected_pins": ["R1.2", "POWER_MINUS"]}
+                ]
+            },
+            "simulation_result": {
+                "status": "SOLVED",
+                "node_voltages": {"NODE_VCC": 5.0, "NODE_GND": 0.0},
+                "branch_currents": {"R1": 5.0}
+            },
+            "ar_grounding_state": {"tracking": "ACTIVE", "registration": "ACTIVE"}
+        }
+        rep2 = validate_physical_circuit(gt_real, pipeline_perfect, is_actual_hardware_test=True)
+        self.assertEqual(rep2["physical_validation_status"], "PERFORMED_VERIFIED")
 
 
 if __name__ == "__main__":
