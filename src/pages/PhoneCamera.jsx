@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Camera, CameraOff, RefreshCw, Zap, CheckCircle2, AlertTriangle, ShieldCheck, Upload, Sparkles, Eye, Box, ArrowRight } from 'lucide-react';
 import { API_BASE_URL, WS_BASE_URL } from '../services/api';
 import { getIceServers } from '../config/webrtc';
