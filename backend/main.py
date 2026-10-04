@@ -959,6 +959,76 @@ def get_lan_ip():
     except Exception:
         return {"lan_ip": "127.0.0.1", "port": 5173}
 
+# In-memory single-photo scanner session store (Strictly ONE photo workflow)
+single_photo_sessions: Dict[str, Dict[str, Any]] = {}
+
+class SinglePhotoPayload(BaseModel):
+    sessionId: Optional[str] = None
+    photo: str  # single validated base64 data url
+    valid: bool = True
+
+@app.post("/api/scanner/session/{session_id}/connect")
+async def scanner_session_connect(session_id: str):
+    """Signals that a phone has connected to the single-photo scanner session."""
+    if session_id not in single_photo_sessions:
+        single_photo_sessions[session_id] = {
+            "session_id": session_id,
+            "phone_connected": True,
+            "photo": None,
+            "valid": False,
+            "status": "connected"
+        }
+    else:
+        single_photo_sessions[session_id]["phone_connected"] = True
+        single_photo_sessions[session_id]["status"] = "connected"
+
+    # Relay peer_status to desktop via websocket if active
+    if session_id in session_manager.active_sessions and "laptop" in session_manager.active_sessions[session_id]:
+        await session_manager.send_json(session_manager.active_sessions[session_id]["laptop"], {
+            "type": "peer_status",
+            "status": "connected",
+            "peer": "phone"
+        })
+
+    return {"success": True, "session_id": session_id, "status": "connected"}
+
+@app.get("/api/scanner/session/{session_id}")
+def get_scanner_session(session_id: str):
+    """Returns current state of single-photo scanner session."""
+    return single_photo_sessions.get(session_id, {
+        "session_id": session_id,
+        "phone_connected": False,
+        "photo": None,
+        "valid": False,
+        "status": "waiting"
+    })
+
+@app.post("/api/scanner/session/{session_id}/photo")
+async def upload_scanner_single_photo(session_id: str, payload: SinglePhotoPayload):
+    """Receives exactly ONE validated circuit photo sent from mobile phone."""
+    single_photo_sessions[session_id] = {
+        "session_id": session_id,
+        "phone_connected": True,
+        "photo": payload.photo,
+        "valid": payload.valid,
+        "status": "photo_received"
+    }
+
+    # Relay to laptop via websocket if connected
+    if session_id in session_manager.active_sessions and "laptop" in session_manager.active_sessions[session_id]:
+        await session_manager.send_json(session_manager.active_sessions[session_id]["laptop"], {
+            "type": "photo_received",
+            "photo": payload.photo,
+            "valid": payload.valid
+        })
+
+    return {
+        "success": True,
+        "session_id": session_id,
+        "valid": payload.valid,
+        "status": "photo_received"
+    }
+
 # ---------------------------------------------------------------------------
 # Phase 24A: Physical Validation & Reliability Dashboard Endpoints
 # ---------------------------------------------------------------------------

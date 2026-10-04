@@ -13,6 +13,7 @@ import Results from './pages/Results';
 import Learn from './pages/Learn';
 import Validation from './pages/Validation';
 import PhoneCamera from './pages/PhoneCamera';
+import MobileScanner from './pages/MobileScanner';
 import CircuitDiagramAR from './pages/CircuitDiagramAR';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
       <Router>
         <Routes>
           <Route path="/phone-camera" element={<PhoneCamera />} />
+          <Route path="/scanner-mobile" element={<MobileScanner />} />
           <Route path="*" element={
             <Layout>
               <Routes>
