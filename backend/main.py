@@ -4,7 +4,14 @@ Phase 9 OpenCV Preprocessing, Phase 10 YOLO Detection, Phase 11 Resistor Color, 
 """
 
 import os
+import sys
 import socket
+
+# Ensure backend directory is in sys.path for direct or module execution
+_backend_dir = os.path.dirname(os.path.abspath(__file__))
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, File, UploadFile, Request
 from fastapi.responses import JSONResponse
@@ -210,10 +217,11 @@ async def analyze_image_endpoint(
 @app.post("/api/circuit/photo-map")
 async def photo_map_circuit_endpoint(request: Request):
     """
-    Submission MVP Pipeline (Phase 24.1):
-    ONE BREADBOARD PHOTO -> COMPONENT DETECTION -> TERMINAL DETECTION -> BREADBOARD HOLE MAPPING -> VERIFIED CIRCUIT STATE
+    Submission Master Pipeline:
+    Guided 3-Photo Circuit Capture (Top/Left/Right) & Multi-View Fusion -> Verified Circuit State.
+    Fully backwards-compatible with single-photo requests.
     """
-    from core.photo_circuit_pipeline import map_photo_to_circuit
+    from core.photo_circuit_pipeline import map_photo_to_circuit, map_multi_view_circuit
 
     content_type = request.headers.get("content-type", "")
     image_input = None
@@ -221,13 +229,45 @@ async def photo_map_circuit_endpoint(request: Request):
 
     if "multipart/form-data" in content_type:
         form = await request.form()
-        uploaded_file = form.get("file") or form.get("image")
-        if uploaded_file and hasattr(uploaded_file, "read"):
-            image_input = await uploaded_file.read()
+        # Check for 3-view uploads: top_view, left_view, right_view
+        top_f = form.get("top_view") or form.get("top") or form.get("file") or form.get("image")
+        left_f = form.get("left_view") or form.get("left")
+        right_f = form.get("right_view") or form.get("right")
+
+        views_list = []
+        for f in [top_f, left_f, right_f]:
+            if f and hasattr(f, "read"):
+                b = await f.read()
+                if b:
+                    views_list.append(b)
+
+        if len(views_list) > 1:
+            image_input = views_list
+        elif len(views_list) == 1:
+            image_input = views_list[0]
+
+        mock_raw = form.get("mock_detections")
+        if mock_raw:
+            try:
+                import json
+                mock_dets = json.loads(mock_raw)
+            except Exception:
+                pass
     else:
         try:
             body = await request.json()
-            image_input = body.get("image") or body.get("image_base64") or body.get("image_bytes") or body.get("file")
+            views = body.get("views")
+            top_img = body.get("top_image") or body.get("top_view") or body.get("top")
+            left_img = body.get("left_image") or body.get("left_view") or body.get("left")
+            right_img = body.get("right_image") or body.get("right_view") or body.get("right")
+
+            if views and isinstance(views, (list, dict)) and len(views) > 1:
+                image_input = views
+            elif top_img and (left_img or right_img):
+                image_input = [v for v in [top_img, left_img, right_img] if v]
+            else:
+                image_input = body.get("image") or body.get("image_base64") or body.get("image_bytes") or body.get("file") or top_img
+
             mock_dets = body.get("mock_detections")
         except Exception:
             raw_body = await request.body()
@@ -235,9 +275,153 @@ async def photo_map_circuit_endpoint(request: Request):
                 image_input = raw_body
 
     if not image_input:
-        raise HTTPException(status_code=400, detail="Missing required image file upload or JSON 'image' / 'image_base64' payload.")
+        raise HTTPException(status_code=400, detail="Missing required image file upload or JSON 'views' / 'image_base64' payload.")
 
     result = map_photo_to_circuit(image_input, mock_detections=mock_dets)
+    global _CURRENT_CIRCUIT_STATE
+    _CURRENT_CIRCUIT_STATE = result
+    return result
+
+@app.post("/api/circuit/validate-view")
+async def validate_photo_view_endpoint(request: Request):
+    """
+    Real-Time Photo Quality & Viewing Angle Validator (AI-Guided Capture).
+    Evaluates 10 factors before enabling capture (Section 5).
+    """
+    import base64
+    import cv2
+    import numpy as np
+    from cv.photo_quality_validator import validate_photo_quality
+
+    body = {}
+    content_type = request.headers.get("content-type", "")
+    expected_view = "top"
+    image_bytes = None
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        expected_view = form.get("expected_view", "top")
+        f = form.get("image") or form.get("file")
+        if f and hasattr(f, "read"):
+            image_bytes = await f.read()
+    else:
+        try:
+            body = await request.json()
+            expected_view = body.get("expected_view", "top")
+            img_b64 = body.get("image_base64") or body.get("image")
+            if img_b64:
+                if "," in img_b64:
+                    img_b64 = img_b64.split(",", 1)[1]
+                image_bytes = base64.b64decode(img_b64)
+        except Exception:
+            pass
+
+    if not image_bytes:
+        return {
+            "valid": False,
+            "score": 0,
+            "reasons": ["Missing image data."],
+            "recommendations": ["Please capture or upload a circuit image."],
+            "metrics": {
+                "top_angle": "POOR",
+                "circuit_visibility": "POOR",
+                "image_quality": "POOR"
+            },
+            "board_detected": False,
+            "angle_valid": False,
+            "framing_valid": False,
+            "perspective_valid": False,
+            "sharpness_valid": False,
+            "lighting_valid": False,
+            "stability_valid": False,
+            "obstruction_valid": False,
+            "ready": False,
+            "reason": "MISSING_IMAGE",
+            "suggested_guidance": "Please present a clear view of the breadboard to the camera."
+        }
+
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    val_res = validate_photo_quality(img, expected_view=expected_view)
+    return val_res
+
+@app.post("/api/circuit/multi-photo-map")
+async def multi_photo_map_endpoint(request: Request):
+    """
+    Dedicated AI-Guided 3-View Circuit Capture Endpoint (Section 24).
+    Accepts 3 validated views (Top, Front-Left, Front-Right) of the SAME physical breadboard.
+    Returns single verified circuit state consumed by 3D, AR, and simulation.
+    """
+    from core.photo_circuit_pipeline import map_multi_view_circuit
+
+    content_type = request.headers.get("content-type", "")
+    views_input = {}
+    mock_dets = None
+    board_session_id = None
+    capture_session_id = None
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        board_session_id = form.get("board_session_id")
+        capture_session_id = form.get("capture_session_id")
+        
+        for k in ["top", "front_left", "front_right", "left", "right", "top_view", "left_view", "right_view"]:
+            f = form.get(k)
+            if f and hasattr(f, "read"):
+                b = await f.read()
+                if b:
+                    norm_k = "top" if "top" in k else ("front_left" if "left" in k else "front_right")
+                    views_input[norm_k] = b
+
+        mock_raw = form.get("mock_detections")
+        if mock_raw:
+            try:
+                import json
+                mock_dets = json.loads(mock_raw)
+            except Exception:
+                pass
+    else:
+        try:
+            body = await request.json()
+            board_session_id = body.get("board_session_id")
+            capture_session_id = body.get("capture_session_id")
+            mock_dets = body.get("mock_detections")
+
+            raw_views = body.get("views")
+            if isinstance(raw_views, dict):
+                views_input = raw_views
+            elif isinstance(raw_views, list):
+                named_slots = ["top", "front_left", "front_right"]
+                for idx, v in enumerate(raw_views):
+                    slot = named_slots[idx] if idx < len(named_slots) else f"view_{idx}"
+                    views_input[slot] = v
+            else:
+                top_v = body.get("top") or body.get("top_view") or body.get("top_image")
+                left_v = body.get("front_left") or body.get("left") or body.get("left_view") or body.get("left_image")
+                right_v = body.get("front_right") or body.get("right") or body.get("right_view") or body.get("right_image")
+                if top_v:
+                    views_input["top"] = top_v
+                if left_v:
+                    views_input["front_left"] = left_v
+                if right_v:
+                    views_input["front_right"] = right_v
+        except Exception:
+            pass
+
+    if not views_input:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required 3-view inputs. Provide 'views': { top, front_left, front_right }."
+        )
+
+    # Execute deterministic multi-view pipeline
+    result = map_multi_view_circuit(views_input, mock_detections=mock_dets)
+    result["board_session_id"] = board_session_id
+    result["capture_session_id"] = capture_session_id
+    if result.get("status") == "READY":
+        result["status"] = "VERIFIED"
+
     global _CURRENT_CIRCUIT_STATE
     _CURRENT_CIRCUIT_STATE = result
     return result
@@ -775,7 +959,6 @@ def get_lan_ip():
     except Exception:
         return {"lan_ip": "127.0.0.1", "port": 5173}
 
-
 # ---------------------------------------------------------------------------
 # Phase 24A: Physical Validation & Reliability Dashboard Endpoints
 # ---------------------------------------------------------------------------
@@ -1295,4 +1478,22 @@ def analyze_transient_circuit_endpoint(payload: Dict[str, Any]):
         )
 
     return res
+
+
+# FINAL AC CIRCUIT ENGINE ENDPOINT (SPEC.md & Final Submission Master)
+@app.post("/api/circuit/ac-solve")
+def solve_ac_endpoint(payload: Dict[str, Any]):
+    """
+    Executes deterministic sinusoidal steady-state AC analysis for the three
+    canonical AC templates with RLC networks, parallel branches, and motors.
+    """
+    from circuit_solver.ac_motor_solver import solve_ac_circuit_template_py
+    template_id = payload.get("template_id", "CIRCUIT_1_SERIES_RLC_MOTOR")
+    custom_params = payload.get("custom_params", {})
+    cycles = int(payload.get("cycles", 3))
+    try:
+        return solve_ac_circuit_template_py(template_id, custom_params, cycles)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
 

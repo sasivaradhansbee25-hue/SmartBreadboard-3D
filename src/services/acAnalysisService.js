@@ -98,20 +98,46 @@ export async function requestAcAnalysis(netlist, analysisOptions = {}) {
 
   try {
     const res = await apiRequest('/ac/analyze', 'POST', payload);
-    if (res) {
+    if (res && res.status !== 'offline_mock_fallback') {
       if (res.analysis_type === 'ACTIVE_OPAMP_CIRCUIT' || (res.circuit_type && res.circuit_type.startsWith('OPAMP_'))) {
         return normalizeActiveCircuitResult(res);
       }
 
       if (res.status === 'success') {
+        const normalizedCutoff = res.cutoff ? {
+          ...res.cutoff,
+          filterMode: res.cutoff.filterMode || res.cutoff.filter_mode,
+          fcHz: res.cutoff.fcHz !== undefined ? res.cutoff.fcHz : res.cutoff.fc_hz,
+          fLowHz: res.cutoff.fLowHz !== undefined ? res.cutoff.fLowHz : res.cutoff.f_low_hz,
+          fHighHz: res.cutoff.fHighHz !== undefined ? res.cutoff.fHighHz : res.cutoff.f_high_hz,
+          referenceGain: res.cutoff.referenceGain !== undefined ? res.cutoff.referenceGain : res.cutoff.reference_gain
+        } : res.cutoff;
+
+        const normalizedResonance = res.resonance ? {
+          ...res.resonance,
+          resonanceDetected: res.resonance.resonanceDetected !== undefined ? res.resonance.resonanceDetected : res.resonance.resonance_detected,
+          resonantFrequencyHz: res.resonance.resonantFrequencyHz !== undefined ? res.resonance.resonantFrequencyHz : res.resonance.resonant_frequency_hz,
+          impedanceAtResonanceOhms: res.resonance.impedanceAtResonanceOhms !== undefined ? res.resonance.impedanceAtResonanceOhms : res.resonance.impedance_at_resonance_ohms,
+          currentAtResonanceMA: res.resonance.currentAtResonanceMA !== undefined ? res.resonance.currentAtResonanceMA : res.resonance.current_at_resonance_mA,
+          phaseAtResonanceDeg: res.resonance.phaseAtResonanceDeg !== undefined ? res.resonance.phaseAtResonanceDeg : res.resonance.phase_at_resonance_deg
+        } : res.resonance;
+
+        const freqResp = res.frequency_response || res.frequencyResponse;
+        if (freqResp) {
+          freqResp.isMeasured = freqResp.isMeasured !== undefined ? freqResp.isMeasured : freqResp.is_measured;
+        }
+
         return {
           ...res,
+          cutoff: normalizedCutoff,
+          resonance: normalizedResonance,
           circuitType: res.circuitType || res.circuit_type,
           icModel: res.icModel || res.ic_model,
           pinMapping: res.pinMapping || res.pin_mapping,
           operatingState: res.operatingState || res.operating_state,
           transferFunction: res.transferFunction || res.transfer_function,
-          frequencyResponse: res.frequencyResponse || res.frequency_response,
+          frequencyResponse: freqResp,
+          frequency_response: freqResp,
           source: 'mna_simulation',
           is_measured: false,
           isMeasured: false

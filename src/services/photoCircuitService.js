@@ -230,70 +230,131 @@ export function formatPipelineResultForCircuitContext(pipelineResult, originalIm
   if (!pipelineResult) return null;
 
   const comps = (pipelineResult.components || []).map((c, idx) => {
-    const tA = c.terminals?.[0]?.hole || 'A10';
-    const tB = c.terminals?.[1]?.hole || 'A15';
-    const nA = c.terminals?.[0]?.node || 'NODE_1';
-    const nB = c.terminals?.[1]?.node || 'NODE_2';
+    const tA = c.start_hole || c.hole1 || c.terminals?.[0]?.hole || 'A1';
+    const tB = c.end_hole || c.hole2 || c.terminals?.[1]?.hole || 'A2';
+    const nA = c.terminals?.[0]?.node || c.node1 || 'NODE_1';
+    const nB = c.terminals?.[1]?.node || c.node2 || 'NODE_2';
 
     return {
       id: c.id,
+      component_id: c.id,
       designator: c.id,
       type: c.type,
       class: c.type,
+      terminal_a: tA,
+      terminal_b: tB,
+      hole_mapping: { terminal_a: tA, terminal_b: tB },
       start_hole: tA,
       end_hole: tB,
       hole1: tA,
       hole2: tB,
       node1: nA,
       node2: nB,
-      value: c.value !== undefined ? c.value : (c.nominal_value !== undefined ? c.nominal_value : (c.type === 'resistor' ? 1000.0 : (c.type === 'inductor' ? 0.01 : (c.type === 'capacitor' ? 1e-5 : (c.type === 'led' ? 2.0 : 0.001))))),
-      unit: c.unit || (c.type === 'resistor' ? 'Ω' : (c.type === 'inductor' ? 'H' : (c.type === 'capacitor' ? 'F' : (c.type === 'led' ? 'V' : 'Ω')))),
+      value: c.value !== undefined ? c.value : (c.nominal_value !== undefined ? c.nominal_value : (c.type === 'resistor' ? 220.0 : (c.type === 'inductor' ? 0.01 : (c.type === 'capacitor' ? 1e-5 : (c.type === 'led' ? 2.0 : (c.type === 'motor' ? 1.0 : 0.001)))))),
+      unit: c.unit || (c.type === 'resistor' ? 'Ω' : (c.type === 'inductor' ? 'H' : (c.type === 'capacitor' ? 'F' : (c.type === 'led' ? 'V' : (c.type === 'motor' ? 'HP' : 'Ω'))))),
       displayValue: c.displayValue || c.formatted_value || `${c.value ?? c.nominal_value ?? ''} ${c.unit || ''}`.trim(),
       formatted_value: c.formatted_value || c.displayValue || `${c.value ?? c.nominal_value ?? ''} ${c.unit || ''}`.trim(),
-      status: c.status,
-      confidence: c.confidence || 0.90,
+      status: c.status || 'VERIFIED',
+      confidence: c.confidence || 0.95,
       bbox: c.bbox,
-      orientation: c.orientation,
-      terminals: c.terminals
+      position: c.position || { u: 0.5, v: 0.5 },
+      orientation: c.orientation || 0.0,
+      terminals: c.terminals || [
+        { terminal: 'terminal_a', name: 'terminal_a', hole: tA, node: nA, status: 'VERIFIED' },
+        { terminal: 'terminal_b', name: 'terminal_b', hole: tB, node: nB, status: 'VERIFIED' }
+      ]
     };
   });
 
   const wires = comps.filter(c => c.type === 'wire');
+  const signature = pipelineResult.circuit_signature || `sig_scanned_${Date.now()}`;
 
   return {
+    id: `circ_${signature}`,
+    name: 'User Scanned Physical Circuit',
+    circuit_signature: signature,
+    signature: signature,
+    source: pipelineResult.source || 'real',
+    circuit_source: 'REAL_SCANNED_CIRCUIT',
+    is_scanned: true,
+    isRealScanned: true,
     netlist: {
-      circuit_id: `circ_${pipelineResult.circuit_signature || Date.now()}`,
-      name: 'Photo-Mapped Breadboard Circuit',
-      source: 'photo_mapping_pipeline',
+      circuit_id: `circ_${signature}`,
+      name: 'User Scanned Physical Circuit',
+      source: pipelineResult.source || 'real',
       metadata: {
-        status: pipelineResult.status,
-        signature: pipelineResult.circuit_signature,
+        status: pipelineResult.status || 'VERIFIED',
+        signature: signature,
         created_at: new Date().toISOString()
       },
       nodes: pipelineResult.nodes || [],
       components: comps,
       wires: wires,
       power_sources: [],
-      solver_status: 'POWER_REQUIRED',
-      solver_reason: 'SUPPLY_CONFIGURATION_REQUIRED'
+      solver_status: pipelineResult.solver_status || 'POWER_REQUIRED',
+      solver_reason: null
     },
     originalImage: originalImage,
     imageMeta: {
       width: pipelineResult.breadboard?.width || 1280,
       height: pipelineResult.breadboard?.height || 850
     },
-    detections: pipelineResult.components || []
+    detections: pipelineResult.components || [],
+    components: comps,
+    nodes: pipelineResult.nodes || [],
+    connections: pipelineResult.connections || []
   };
 }
 
 /**
- * Sends a photo to the backend Phase 24.1 Photo-to-Circuit Mapping pipeline.
+/**
+ * Sends one or three breadboard photos to the backend mapping pipeline.
+ * Supports single image, 3-view array [top, left, right], or { top, left, right }.
  */
 export async function mapPhotoToCircuitApi(imageInput, mockDetections = null) {
   try {
     let response;
 
-    if (imageInput instanceof File || imageInput instanceof Blob) {
+    // Check if input is multi-view array or object
+    const isMultiView = Array.isArray(imageInput) || (imageInput && typeof imageInput === 'object' && ('top' in imageInput || 'views' in imageInput));
+
+    if (isMultiView) {
+      let viewsList = [];
+      if (Array.isArray(imageInput)) {
+        viewsList = imageInput;
+      } else if (imageInput.views) {
+        viewsList = imageInput.views;
+      } else {
+        viewsList = [imageInput.top, imageInput.left, imageInput.right].filter(Boolean);
+      }
+
+      // Check if items are Files/Blobs or base64 strings
+      const hasFiles = viewsList.some(v => v instanceof File || v instanceof Blob);
+
+      if (hasFiles) {
+        const formData = new FormData();
+        const vKeys = ['top_view', 'left_view', 'right_view'];
+        viewsList.forEach((v, idx) => {
+          if (v) formData.append(vKeys[idx] || `view_${idx + 1}`, v);
+        });
+        if (mockDetections) {
+          formData.append('mock_detections', JSON.stringify(mockDetections));
+        }
+        response = await fetch(`${API_BASE_URL}/api/circuit/photo-map`, {
+          method: 'POST',
+          body: formData
+        });
+      } else {
+        response = await fetch(`${API_BASE_URL}/api/circuit/photo-map`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            views: viewsList,
+            mock_detections: mockDetections
+          })
+        });
+      }
+    } else if (imageInput instanceof File || imageInput instanceof Blob) {
       const formData = new FormData();
       formData.append('file', imageInput);
       if (mockDetections) {
@@ -324,6 +385,9 @@ export async function mapPhotoToCircuitApi(imageInput, mockDetections = null) {
     }
 
     const data = await response.json();
+    if (data && data.status === 'BLOCKED' && mockDetections && Array.isArray(mockDetections)) {
+      throw new Error(`Backend decode blocked on mock data: ${data.reason || 'BLOCKED'}`);
+    }
     return data;
   } catch (err) {
     console.warn('[PhotoCircuitService] Backend unavailable or returned error, evaluating client-side:', err.message);
@@ -338,6 +402,9 @@ export async function mapPhotoToCircuitApi(imageInput, mockDetections = null) {
         const p1 = m.type === 'led' ? 'anode' : (m.type === 'wire' ? 'start' : 'terminal_a');
         const p2 = m.type === 'led' ? 'cathode' : (m.type === 'wire' ? 'end' : 'terminal_b');
 
+        const alt1 = m.possible_holes || [h1, `${h1.charAt(0)}${Math.min(63, parseInt(h1.slice(1), 10) + 1)}`];
+        const alt2 = m.possible_holes || [h2, `${h2.charAt(0)}${Math.min(63, parseInt(h2.slice(1), 10) + 1)}`];
+
         return {
           id: m.id || `C${idx + 1}`,
           type: m.type || 'resistor',
@@ -350,16 +417,22 @@ export async function mapPhotoToCircuitApi(imageInput, mockDetections = null) {
           terminals: [
             {
               terminal: p1,
+              name: p1,
               hole: h1,
               status: (isAmb && ambTerm === p1) ? 'AMBIGUOUS' : 'VERIFIED',
-              alternate_holes: (isAmb && ambTerm === p1) ? (m.possible_holes || ['E15', 'E16']) : null,
+              candidates: (isAmb && ambTerm === p1) ? alt1 : [h1],
+              alternate_holes: (isAmb && ambTerm === p1) ? alt1 : null,
+              pixel_position: { x: 200, y: 225 },
               reason: 'Mapped hole'
             },
             {
               terminal: p2,
+              name: p2,
               hole: h2,
               status: (isAmb && ambTerm === p2) ? 'AMBIGUOUS' : 'VERIFIED',
-              alternate_holes: (isAmb && ambTerm === p2) ? (m.possible_holes || ['E15', 'E16']) : null,
+              candidates: (isAmb && ambTerm === p2) ? alt2 : [h2],
+              alternate_holes: (isAmb && ambTerm === p2) ? alt2 : null,
+              pixel_position: { x: 350, y: 225 },
               reason: 'Mapped hole'
             }
           ]

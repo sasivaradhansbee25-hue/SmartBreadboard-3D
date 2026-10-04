@@ -1,0 +1,757 @@
+{
+  "template_id": "CIRCUIT_3_SERIES_PARALLEL_COMPENSATION",
+  "name": "Circuit 3 \u2014 Series RLC + Parallel Compensation Schematic",
+  "image_url": "/circuits/circuit_3_diagram.png",
+  "image_width": 1280,
+  "image_height": 720,
+  "is_schematic_diagram": true,
+  "components": [
+    {
+      "bbox": [
+        309,
+        49,
+        411,
+        151
+      ],
+      "center": [
+        100,
+        360
+      ],
+      "terminals": [
+        {
+          "terminal": "terminal_L",
+          "pixel": [
+            100,
+            324
+          ],
+          "normalized": [
+            0.078125,
+            0.45
+          ]
+        },
+        {
+          "terminal": "terminal_N",
+          "pixel": [
+            100,
+            396
+          ],
+          "normalized": [
+            0.078125,
+            0.55
+          ]
+        }
+      ],
+      "id": "AC_SOURCE",
+      "label": "AC Supply (230V RMS, 50Hz)",
+      "type": "ac_source",
+      "value": 230,
+      "unit": "V",
+      "confidence": 0.99
+    },
+    {
+      "bbox": [
+        156,
+        160,
+        204,
+        240
+      ],
+      "center": [
+        200,
+        180
+      ],
+      "terminals": [
+        {
+          "terminal": "terminal_A",
+          "pixel": [
+            160,
+            180
+          ],
+          "normalized": [
+            0.125,
+            0.25
+          ]
+        },
+        {
+          "terminal": "terminal_B",
+          "pixel": [
+            240,
+            180
+          ],
+          "normalized": [
+            0.1875,
+            0.25
+          ]
+        }
+      ],
+      "id": "F1",
+      "label": "Fuse F1 (5A)",
+      "type": "fuse",
+      "value": 5,
+      "unit": "A",
+      "confidence": 0.98
+    },
+    {
+      "bbox": [
+        165,
+        280,
+        195,
+        350
+      ],
+      "center": [
+        315,
+        180
+      ],
+      "terminals": [
+        {
+          "terminal": "terminal_A",
+          "pixel": [
+            280,
+            180
+          ],
+          "normalized": [
+            0.21875,
+            0.25
+          ]
+        },
+        {
+          "terminal": "terminal_B",
+          "pixel": [
+            350,
+            180
+          ],
+          "normalized": [
+            0.2734375,
+            0.25
+          ]
+        }
+      ],
+      "id": "S1",
+      "label": "Switch S1 (ON)",
+      "type": "switch",
+      "value": 1,
+      "unit": "state",
+      "confidence": 0.98
+    },
+    {
+      "bbox": [
+        148,
+        378,
+        212,
+        442
+      ],
+      "center": [
+        410,
+        180
+      ],
+      "terminals": [
+        {
+          "terminal": "terminal_A",
+          "pixel": [
+            388,
+            180
+          ],
+          "normalized": [
+            0.303125,
+            0.25
+          ]
+        },
+        {
+          "terminal": "terminal_B",
+          "pixel": [
+            432,
+            180
+          ],
+          "normalized": [
+            0.3375,
+            0.25
+          ]
+        }
+      ],
+      "id": "A1",
+      "label": "Line Ammeter A1",
+      "type": "ammeter",
+      "value": 0,
+      "unit": "A",
+      "confidence": 0.99
+    },
+    {
+      "id": "R2",
+      "label": "Resistor R2 (220 \u03a9 Damping)",
+      "type": "resistor",
+      "value": 220,
+      "unit": "\u03a9",
+      "bbox": [
+        235,
+        460,
+        315,
+        500
+      ],
+      "center": [
+        480,
+        275
+      ],
+      "terminals": [
+        {
+          "terminal": "terminal_A",
+          "pixel": [
+            480,
+            240
+          ],
+          "normalized": [
+            0.375,
+            0.3333333333333333
+          ]
+        },
+        {
+          "terminal": "terminal_B",
+          "pixel": [
+            480,
+            310
+          ],
+          "normalized": [
+            0.375,
+            0.4305555555555556
+          ]
+        }
+      ],
+      "confidence": 0.98
+    },
+    {
+      "bbox": [
+        398,
+        450,
+        442,
+        510
+      ],
+      "center": [
+        480,
+        420
+      ],
+      "terminals": [
+        {
+          "terminal": "terminal_A",
+          "pixel": [
+            480,
+            360
+          ],
+          "normalized": [
+            0.375,
+            0.5
+          ]
+        },
+        {
+          "terminal": "terminal_B",
+          "pixel": [
+            480,
+            480
+          ],
+          "normalized": [
+            0.375,
+            0.6666666666666666
+          ]
+        }
+      ],
+      "id": "C2",
+      "label": "Capacitor C2 (1 \u03bcF Compensation)",
+      "type": "capacitor",
+      "value": 1,
+      "unit": "\u03bcF",
+      "confidence": 0.98
+    },
+    {
+      "bbox": [
+        152,
+        550,
+        208,
+        670
+      ],
+      "center": [
+        610,
+        180
+      ],
+      "terminals": [
+        {
+          "terminal": "terminal_A",
+          "pixel": [
+            560,
+            180
+          ],
+          "normalized": [
+            0.4375,
+            0.25
+          ]
+        },
+        {
+          "terminal": "terminal_B",
+          "pixel": [
+            660,
+            180
+          ],
+          "normalized": [
+            0.515625,
+            0.25
+          ]
+        }
+      ],
+      "id": "R1",
+      "label": "Resistor R1 (10 \u03a9)",
+      "type": "resistor",
+      "value": 10,
+      "unit": "\u03a9",
+      "confidence": 0.98
+    },
+    {
+      "bbox": [
+        142,
+        710,
+        190,
+        830
+      ],
+      "center": [
+        770,
+        166
+      ],
+      "terminals": [
+        {
+          "terminal": "terminal_A",
+          "pixel": [
+            720,
+            180
+          ],
+          "normalized": [
+            0.5625,
+            0.25
+          ]
+        },
+        {
+          "terminal": "terminal_B",
+          "pixel": [
+            820,
+            180
+          ],
+          "normalized": [
+            0.640625,
+            0.25
+          ]
+        }
+      ],
+      "id": "L1",
+      "label": "Inductor L1 (100 mH)",
+      "type": "inductor",
+      "value": 100,
+      "unit": "mH",
+      "confidence": 0.98
+    },
+    {
+      "id": "C1",
+      "label": "Capacitor C1 (100 \u03bcF)",
+      "type": "capacitor",
+      "value": 100,
+      "unit": "\u03bcF",
+      "bbox": [
+        155,
+        880,
+        205,
+        920
+      ],
+      "center": [
+        900,
+        180
+      ],
+      "terminals": [
+        {
+          "terminal": "terminal_A",
+          "pixel": [
+            870,
+            180
+          ],
+          "normalized": [
+            0.6796875,
+            0.25
+          ]
+        },
+        {
+          "terminal": "terminal_B",
+          "pixel": [
+            930,
+            180
+          ],
+          "normalized": [
+            0.7265625,
+            0.25
+          ]
+        }
+      ],
+      "confidence": 0.98
+    },
+    {
+      "bbox": [
+        298,
+        968,
+        362,
+        1032
+      ],
+      "center": [
+        1000,
+        330
+      ],
+      "terminals": [
+        {
+          "terminal": "terminal_A",
+          "pixel": [
+            978,
+            330
+          ],
+          "normalized": [
+            0.7640625,
+            0.4583333333333333
+          ]
+        },
+        {
+          "terminal": "terminal_B",
+          "pixel": [
+            1022,
+            330
+          ],
+          "normalized": [
+            0.7984375,
+            0.4583333333333333
+          ]
+        }
+      ],
+      "id": "V1",
+      "label": "Voltmeter V1 (Motor Terminal Voltage)",
+      "type": "voltmeter",
+      "value": 0,
+      "unit": "V",
+      "confidence": 0.99
+    },
+    {
+      "bbox": [
+        303,
+        1063,
+        417,
+        1177
+      ],
+      "center": [
+        1120,
+        360
+      ],
+      "terminals": [
+        {
+          "terminal": "terminal_L",
+          "pixel": [
+            1120,
+            318
+          ],
+          "normalized": [
+            0.875,
+            0.44166666666666665
+          ]
+        },
+        {
+          "terminal": "terminal_N",
+          "pixel": [
+            1120,
+            402
+          ],
+          "normalized": [
+            0.875,
+            0.5583333333333333
+          ]
+        }
+      ],
+      "id": "MOTOR",
+      "label": "AC Motor (0.75 HP)",
+      "type": "motor",
+      "value": 0.75,
+      "unit": "HP",
+      "confidence": 0.99
+    }
+  ],
+  "test_points": [
+    {
+      "id": "TP1",
+      "label": "TP1",
+      "type": "test_point",
+      "pixel": [
+        130,
+        180
+      ],
+      "normalized": [
+        0.1015625,
+        0.25
+      ],
+      "bbox": [
+        168,
+        118,
+        192,
+        142
+      ]
+    },
+    {
+      "id": "TP2",
+      "label": "TP2",
+      "type": "test_point",
+      "pixel": [
+        450,
+        180
+      ],
+      "normalized": [
+        0.3515625,
+        0.25
+      ],
+      "bbox": [
+        168,
+        438,
+        192,
+        462
+      ]
+    },
+    {
+      "id": "TP3",
+      "label": "TP3",
+      "type": "test_point",
+      "pixel": [
+        510,
+        275
+      ],
+      "normalized": [
+        0.3984375,
+        0.3819444444444444
+      ],
+      "bbox": [
+        263,
+        498,
+        287,
+        522
+      ]
+    },
+    {
+      "id": "TP4",
+      "label": "TP4",
+      "type": "test_point",
+      "pixel": [
+        690,
+        180
+      ],
+      "normalized": [
+        0.5390625,
+        0.25
+      ],
+      "bbox": [
+        168,
+        678,
+        192,
+        702
+      ]
+    },
+    {
+      "id": "TP5",
+      "label": "TP5",
+      "type": "test_point",
+      "pixel": [
+        1060,
+        180
+      ],
+      "normalized": [
+        0.828125,
+        0.25
+      ],
+      "bbox": [
+        168,
+        1048,
+        192,
+        1072
+      ]
+    }
+  ],
+  "wires": [
+    {
+      "id": "w_src_f1",
+      "path": [
+        [
+          100,
+          324
+        ],
+        [
+          100,
+          180
+        ],
+        [
+          160,
+          180
+        ]
+      ],
+      "connected": [
+        "AC_SOURCE",
+        "F1"
+      ]
+    },
+    {
+      "id": "w_f1_s1",
+      "path": [
+        [
+          240,
+          180
+        ],
+        [
+          280,
+          180
+        ]
+      ],
+      "connected": [
+        "F1",
+        "S1"
+      ]
+    },
+    {
+      "id": "w_s1_a1",
+      "path": [
+        [
+          350,
+          180
+        ],
+        [
+          388,
+          180
+        ]
+      ],
+      "connected": [
+        "S1",
+        "A1"
+      ]
+    },
+    {
+      "id": "w_a1_node",
+      "path": [
+        [
+          432,
+          180
+        ],
+        [
+          480,
+          180
+        ]
+      ],
+      "connected": [
+        "A1",
+        "R2"
+      ]
+    },
+    {
+      "id": "w_node_r1",
+      "path": [
+        [
+          480,
+          180
+        ],
+        [
+          560,
+          180
+        ]
+      ],
+      "connected": [
+        "R2",
+        "R1"
+      ]
+    },
+    {
+      "id": "w_r1_l1",
+      "path": [
+        [
+          660,
+          180
+        ],
+        [
+          720,
+          180
+        ]
+      ],
+      "connected": [
+        "R1",
+        "L1"
+      ]
+    },
+    {
+      "id": "w_l1_c1",
+      "path": [
+        [
+          820,
+          180
+        ],
+        [
+          870,
+          180
+        ]
+      ],
+      "connected": [
+        "L1",
+        "C1"
+      ]
+    },
+    {
+      "id": "w_c1_v1",
+      "path": [
+        [
+          930,
+          180
+        ],
+        [
+          1000,
+          180
+        ]
+      ],
+      "connected": [
+        "C1",
+        "V1"
+      ]
+    },
+    {
+      "id": "w_v1_motor",
+      "path": [
+        [
+          1000,
+          180
+        ],
+        [
+          1120,
+          180
+        ],
+        [
+          1120,
+          318
+        ]
+      ],
+      "connected": [
+        "V1",
+        "MOTOR"
+      ]
+    },
+    {
+      "id": "w_return",
+      "path": [
+        [
+          1120,
+          402
+        ],
+        [
+          1120,
+          540
+        ],
+        [
+          100,
+          540
+        ],
+        [
+          100,
+          396
+        ]
+      ],
+      "connected": [
+        "MOTOR",
+        "AC_SOURCE"
+      ]
+    }
+  ]
+}

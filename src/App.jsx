@@ -13,6 +13,7 @@ import Results from './pages/Results';
 import Learn from './pages/Learn';
 import Validation from './pages/Validation';
 import PhoneCamera from './pages/PhoneCamera';
+import CircuitDiagramAR from './pages/CircuitDiagramAR';
 
 export default function App() {
   return (
@@ -26,6 +27,8 @@ export default function App() {
                 <Route path="/" element={<Home />} />
                 <Route path="/live-camera" element={<LiveCamera />} />
                 <Route path="/scanner" element={<Scanner />} />
+                <Route path="/circuit-ar" element={<CircuitDiagramAR />} />
+                <Route path="/motor-trainer" element={<CircuitDiagramAR />} />
                 <Route path="/analysis" element={<Analysis />} />
                 <Route path="/simulator" element={<Simulator />} />
                 <Route path="/calculator" element={<Calculator />} />

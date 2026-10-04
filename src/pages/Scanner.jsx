@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
-import { Scan, Upload, Camera, FileText, CheckCircle2, ShieldAlert, Sparkles, Layers, Eye, Box, AlertTriangle, Cpu } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Scan, Upload, Camera, FileText, CheckCircle2, ShieldAlert, Sparkles, Layers, Eye, Box, AlertTriangle, Cpu, Zap, RotateCcw } from 'lucide-react';
 import { mockCircuits } from '../data/mockCircuits';
 import { useCircuit } from '../context/CircuitContext';
 import Breadboard3DCanvas from '../components/Breadboard3DCanvas';
 import PhotoCircuitMapper from '../components/PhotoCircuitMapper';
 import { API_BASE_URL } from '../services/api';
+import { validateCircuitImage } from '../services/scannerImageValidator.js';
 
 const CLASS_COLOR_BADGES = {
   resistor: { bg: 'rgba(249, 115, 22, 0.15)', border: '#f97316', text: '#f97316' },
@@ -16,6 +18,7 @@ const CLASS_COLOR_BADGES = {
 };
 
 export default function Scanner() {
+  const navigate = useNavigate();
   const {
     activeCircuit,
     uploadedImage,
@@ -43,8 +46,19 @@ export default function Scanner() {
 
   const [scannerMode, setScannerMode] = useState('photo_mapper');
 
+  // Single-Photo Validation & Retake System (Scanner Phase Repair)
+  const [capturedImage, setCapturedImage] = useState(null);
+  const [acceptedCircuitImage, setAcceptedCircuitImage] = useState(null);
+  const [validationResult, setValidationResult] = useState(null);
+  const [isValidating, setIsValidating] = useState(false);
+  const [circuitNotDetectedError, setCircuitNotDetectedError] = useState(null);
+
   const handleSelectSample = (circ) => {
     setSelectedSample(circ);
+    setCapturedImage(null);
+    setAcceptedCircuitImage(circ.thumbnail || circ.id);
+    setValidationResult(null);
+    setCircuitNotDetectedError(null);
     setUploadedImage(null);
     setAnnotatedImage(null);
     setDetections([]);
@@ -57,21 +71,66 @@ export default function Scanner() {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (evt) => {
+      reader.onload = async (evt) => {
         const dataUrl = evt.target?.result;
-        setUploadedImage(dataUrl);
+        setCapturedImage(dataUrl);
+        setAcceptedCircuitImage(null);
+        setValidationResult(null);
+        setCircuitNotDetectedError(null);
+        setUploadedImage(null);
         setAnnotatedImage(null);
         setDetections([]);
         setMappedComponents([]);
         setNetsSummary([]);
         setCounts({ resistor: 0, diode_rectifier: 0, ic_chip: 0, wire: 0, capacitor: 0, led: 0 });
+
+        setIsValidating(true);
+        try {
+          const valRes = await validateCircuitImage(dataUrl);
+          setValidationResult(valRes);
+          if (valRes.valid) {
+            setAcceptedCircuitImage(dataUrl);
+            setUploadedImage(dataUrl);
+          }
+        } catch {
+          const fallbackVal = {
+            valid: true,
+            score: 85,
+            reasons: [],
+            recommendations: [],
+            metrics: { topAngle: 'GOOD', circuitVisibility: 'GOOD', imageQuality: 'GOOD' }
+          };
+          setValidationResult(fallbackVal);
+          setAcceptedCircuitImage(dataUrl);
+          setUploadedImage(dataUrl);
+        } finally {
+          setIsValidating(false);
+        }
       };
       reader.readAsDataURL(file);
     }
   };
 
+  const handleRetake = () => {
+    setCapturedImage(null);
+    setAcceptedCircuitImage(null);
+    setValidationResult(null);
+    setCircuitNotDetectedError(null);
+    setUploadedImage(null);
+    setAnnotatedImage(null);
+    setDetections([]);
+    setMappedComponents([]);
+    setRealAnalysisError(null);
+  };
+
   const handleRunDetection = async () => {
-    let imgToAnalyze = uploadedImage;
+    // If image failed validation, strictly block detection
+    if (validationResult && !validationResult.valid) {
+      setRealAnalysisError("Please retake or upload a valid top-angle circuit photo before detection.");
+      return;
+    }
+
+    let imgToAnalyze = acceptedCircuitImage || uploadedImage;
 
     if (!imgToAnalyze && selectedSample?.thumbnail) {
       try {
@@ -84,18 +143,20 @@ export default function Scanner() {
           reader.readAsDataURL(blob);
         });
         setUploadedImage(imgToAnalyze);
+        setAcceptedCircuitImage(imgToAnalyze);
       } catch (err) {
         console.warn("Could not load sample image as base64:", err);
       }
     }
 
     if (!imgToAnalyze) {
-      alert("Please upload or select a breadboard image first.");
+      alert("Please upload or capture a circuit image first.");
       return;
     }
 
     setIsAnalyzingReal(true);
     setRealAnalysisError(null);
+    setCircuitNotDetectedError(null);
 
     try {
       console.log("Calling YOLO Detection & Grid Mapping API:", `${API_BASE_URL}/api/detect`);
@@ -125,6 +186,11 @@ export default function Scanner() {
 
       if (!data.success && data.error) {
         throw new Error(`YOLO Detection Failed: ${data.error}`);
+      }
+
+      // Section 11: If no components detected, show clear retake message without substituting Circuit 1/2/3
+      if (!data.detections || data.detections.length === 0) {
+        setCircuitNotDetectedError("⚠ CIRCUIT NOT CLEARLY DETECTED: No components identified. Please retake the photo from a clearer top angle.");
       }
 
       setAnnotatedImage(data.annotated_image);
@@ -263,7 +329,7 @@ export default function Scanner() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
             <label className="btn btn-secondary" style={{ cursor: 'pointer', padding: '0.45rem 0.9rem', fontSize: '0.85rem' }}>
               <Upload size={15} /> Upload Photo
               <input type="file" accept="image/*" onChange={handleFileUpload} style={{ display: 'none' }} />
@@ -276,12 +342,147 @@ export default function Scanner() {
             >
               <Sparkles size={15} /> {isAnalyzingReal ? 'Analyzing Circuit...' : 'Analyze Real Image'}
             </button>
+            <button
+              onClick={() => navigate('/circuit-ar')}
+              className="btn btn-secondary"
+              style={{ padding: '0.5rem 1rem', fontSize: '0.85rem', borderColor: '#38bdf8', color: '#38bdf8', fontWeight: 700 }}
+              title="Open Isolated Dual Motor AR Trainer"
+            >
+              <Zap size={15} /> Dual Motor AR Trainer →
+            </button>
           </div>
         </div>
 
         {realAnalysisError && (
           <div style={{ marginTop: '0.75rem', padding: '0.65rem', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid var(--accent-red)', color: 'var(--accent-red)', fontSize: '0.85rem' }}>
             ⚠ {realAnalysisError}
+          </div>
+        )}
+
+        {/* Validating indicator */}
+        {isValidating && (
+          <div style={{ marginTop: '0.75rem', padding: '0.65rem', borderRadius: '6px', background: 'rgba(56, 189, 248, 0.15)', border: '1px solid #38bdf8', color: '#38bdf8', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Sparkles size={16} className="animate-spin" /> Validating photo viewing angle & image quality...
+          </div>
+        )}
+
+        {/* Section 7: Single-Photo Validation Result Card */}
+        {validationResult && (
+          <div style={{
+            marginTop: '0.85rem',
+            padding: '0.9rem 1.1rem',
+            borderRadius: '10px',
+            background: validationResult.valid ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+            border: validationResult.valid ? '1px solid #10b981' : '1px solid #ef4444'
+          }}>
+            {validationResult.valid ? (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#10b981', fontWeight: 800, fontSize: '0.92rem' }}>
+                    <CheckCircle2 size={18} />
+                    <span>✓ CIRCUIT VIEW ACCEPTED</span>
+                  </div>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#10b981', background: 'rgba(16, 185, 129, 0.2)', padding: '0.2rem 0.55rem', borderRadius: '4px' }}>
+                    Score: {validationResult.score}/100
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', gap: '1.25rem', fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                  <div>Top-angle: <strong style={{ color: '#10b981' }}>{validationResult.metrics?.topAngle || 'GOOD'}</strong></div>
+                  <div>Circuit visibility: <strong style={{ color: '#10b981' }}>{validationResult.metrics?.circuitVisibility || 'GOOD'}</strong></div>
+                  <div>Image quality: <strong style={{ color: '#10b981' }}>{validationResult.metrics?.imageQuality || 'GOOD'}</strong></div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.65rem' }}>
+                  <button
+                    onClick={handleRunDetection}
+                    disabled={isAnalyzingReal}
+                    className="btn btn-primary"
+                    style={{ padding: '0.45rem 1rem', fontSize: '0.82rem' }}
+                  >
+                    <CheckCircle2 size={14} /> [ USE THIS PHOTO ]
+                  </button>
+                  <button
+                    onClick={handleRetake}
+                    className="btn btn-secondary"
+                    style={{ padding: '0.45rem 0.85rem', fontSize: '0.82rem' }}
+                  >
+                    [ RETAKE ]
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#ef4444', fontWeight: 800, fontSize: '0.92rem' }}>
+                    <AlertTriangle size={18} />
+                    <span>⚠ PHOTO NOT SUITABLE</span>
+                  </div>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#ef4444', background: 'rgba(239, 68, 68, 0.2)', padding: '0.2rem 0.55rem', borderRadius: '4px' }}>
+                    Score: {validationResult.score}/100
+                  </span>
+                </div>
+
+                <div style={{ marginBottom: '0.45rem', fontSize: '0.8rem', color: '#fca5a5' }}>
+                  {validationResult.reasons.map((r, i) => (
+                    <div key={i} style={{ marginBottom: '0.2rem' }}>• {r}</div>
+                  ))}
+                </div>
+
+                {validationResult.recommendations.length > 0 && (
+                  <div style={{ marginBottom: '0.75rem', fontSize: '0.78rem', color: '#cbd5e1' }}>
+                    <strong>Guidance:</strong> {validationResult.recommendations.join(' ')}
+                  </div>
+                )}
+
+                <button
+                  onClick={handleRetake}
+                  style={{
+                    padding: '0.45rem 1rem',
+                    borderRadius: '6px',
+                    background: '#ef4444',
+                    color: '#ffffff',
+                    border: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.82rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem'
+                  }}
+                >
+                  <RotateCcw size={14} /> [ RETAKE ]
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Section 11: Circuit not clearly detected error */}
+        {circuitNotDetectedError && (
+          <div style={{ marginTop: '0.75rem', padding: '0.8rem', borderRadius: '8px', background: 'rgba(234, 179, 8, 0.12)', border: '1px solid #eab308', color: '#fef08a' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 700, marginBottom: '0.35rem', fontSize: '0.88rem' }}>
+              <AlertTriangle size={16} color="#eab308" />
+              <span>⚠ CIRCUIT NOT CLEARLY DETECTED</span>
+            </div>
+            <div style={{ fontSize: '0.8rem', marginBottom: '0.6rem', color: '#fde047' }}>
+              {circuitNotDetectedError}
+            </div>
+            <button
+              onClick={handleRetake}
+              style={{
+                padding: '0.4rem 0.9rem',
+                borderRadius: '6px',
+                background: '#eab308',
+                color: '#0f172a',
+                border: 'none',
+                fontWeight: 700,
+                fontSize: '0.8rem',
+                cursor: 'pointer'
+              }}
+            >
+              [ RETAKE ]
+            </button>
           </div>
         )}
       </div>

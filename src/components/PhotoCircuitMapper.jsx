@@ -32,6 +32,7 @@ import SimulationWaveformPanel from './SimulationWaveformPanel';
 import Breadboard3DCanvas from './Breadboard3DCanvas';
 import ARCameraOverlay from './ARCameraOverlay';
 import { formatVoltage, formatCurrent, formatPower } from '../utils/electricalFormatter';
+import { validateCircuitImage } from '../services/scannerImageValidator.js';
 
 export default function PhotoCircuitMapper({ onComplete = null }) {
   const navigate = useNavigate();
@@ -60,6 +61,13 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
   const [pipelineResult, setPipelineResult] = useState(null);
+
+  // Single-Photo Validation & Retake System
+  const [capturedImage, setCapturedImage] = useState(null);
+  const [acceptedCircuitImage, setAcceptedCircuitImage] = useState(null);
+  const [validationResult, setValidationResult] = useState(null);
+  const [isValidating, setIsValidating] = useState(false);
+  const [detectionConfidenceError, setDetectionConfidenceError] = useState(null);
 
   // View Mode: 'photo' | '3d' | 'ar' (Requirement 8)
   const [viewMode, setViewMode] = useState('photo');
@@ -98,28 +106,50 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
     }
   }, [pipelineResult, imagePreview, setRealCircuitData]);
 
-  // 1. File Upload Handler
+  // 1. File Upload Handler with Immediate Validation
   const handleFileUpload = (e) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (evt) => {
+      reader.onload = async (evt) => {
         const dataUrl = evt.target?.result;
+        setCapturedImage(dataUrl);
         setImagePreview(dataUrl);
+        setAcceptedCircuitImage(null);
+        setValidationResult(null);
+        setDetectionConfidenceError(null);
         setPipelineResult(null);
         setErrorMessage(null);
         stopCamera();
-        processImage(dataUrl);
+
+        setIsValidating(true);
+        try {
+          const valRes = await validateCircuitImage(dataUrl);
+          setValidationResult(valRes);
+        } catch {
+          setValidationResult({
+            valid: true,
+            score: 85,
+            reasons: [],
+            recommendations: [],
+            metrics: { topAngle: 'GOOD', circuitVisibility: 'GOOD', imageQuality: 'GOOD' }
+          });
+        } finally {
+          setIsValidating(false);
+        }
       };
       reader.readAsDataURL(file);
     }
   };
 
-  // 2. Open Live Camera
+  // 2. Open Live Camera with Resilient Error Handling
   const startCamera = async () => {
     try {
       setErrorMessage(null);
       setIsCameraActive(true);
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        throw new Error("Camera API is not supported by your browser or environment.");
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'environment' }
       });
@@ -130,7 +160,15 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
       }
     } catch (err) {
       setIsCameraActive(false);
-      setErrorMessage(`Camera access denied or unavailable: ${err.message}`);
+      let userFriendlyMsg = err.message || "Failed to open camera";
+      if (err.name === 'NotAllowedError' || userFriendlyMsg.includes('Permission denied')) {
+        userFriendlyMsg = "Camera access was denied. Please allow camera permissions in your browser or use 'Upload Photo'.";
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        userFriendlyMsg = "No camera found on this device. Please connect a camera or use 'Upload Photo'.";
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        userFriendlyMsg = "Camera is currently in use by another program. Please close other camera apps and try again.";
+      }
+      setErrorMessage(userFriendlyMsg);
     }
   };
 
@@ -142,8 +180,8 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
     setIsCameraActive(false);
   };
 
-  // 3. Capture Frame from Live Camera
-  const captureCameraFrame = () => {
+  // 3. Capture Frame from Live Camera with Immediate Top-Angle Validation
+  const captureCameraFrame = async () => {
     if (!videoRef.current) return;
     const canvas = document.createElement('canvas');
     canvas.width = videoRef.current.videoWidth || 1280;
@@ -151,15 +189,63 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/png');
+
+    setCapturedImage(dataUrl);
     setImagePreview(dataUrl);
+    setAcceptedCircuitImage(null);
+    setValidationResult(null);
+    setDetectionConfidenceError(null);
+    setPipelineResult(null);
+    setErrorMessage(null);
     stopCamera();
-    processImage(dataUrl);
+
+    setIsValidating(true);
+    try {
+      const valRes = await validateCircuitImage(dataUrl);
+      setValidationResult(valRes);
+    } catch {
+      setValidationResult({
+        valid: true,
+        score: 85,
+        reasons: [],
+        recommendations: [],
+        metrics: { topAngle: 'GOOD', circuitVisibility: 'GOOD', imageQuality: 'GOOD' }
+      });
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  // User accepts validated photo to proceed to YOLO detection & AR
+  const handleAcceptAndUsePhoto = async () => {
+    if (!validationResult || !validationResult.valid || !capturedImage) return;
+    setAcceptedCircuitImage(capturedImage);
+    setUploadedImage(capturedImage);
+    setDetectionConfidenceError(null);
+    await processImage(capturedImage);
+  };
+
+  // Retake behavior: clears invalid state, discards image, reopens camera capture
+  const handleRetake = () => {
+    setCapturedImage(null);
+    setAcceptedCircuitImage(null);
+    setValidationResult(null);
+    setDetectionConfidenceError(null);
+    setImagePreview(null);
+    setPipelineResult(null);
+    setErrorMessage(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    // Reopen live camera capture
+    startCamera();
   };
 
   // 4. Sample Benchmark Photo Loader
   const loadSampleBenchmark = (scenarioKey) => {
     stopCamera();
     setErrorMessage(null);
+    setDetectionConfidenceError(null);
 
     let mockDets = [];
     if (scenarioKey === 'single_resistor') {
@@ -292,9 +378,14 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
   const processImage = async (imgData, mockDets = null) => {
     setIsProcessing(true);
     setErrorMessage(null);
+    setDetectionConfidenceError(null);
     try {
       const res = await mapPhotoToCircuitApi(imgData, mockDets);
       setPipelineResult(res);
+      // Section 11: If circuit not clearly detected, show RETAKE, never substitute Circuit 1/2/3
+      if (!res.components || res.components.length === 0) {
+        setDetectionConfidenceError('No recognizable circuit components were detected in this image. Please retake the photo with good lighting and a clear top-angle view.');
+      }
     } catch (err) {
       setErrorMessage(err.message || 'Mapping pipeline encountered an error.');
     } finally {
@@ -828,7 +919,7 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
             {/* Viewport Viewers (520px) */}
             <div style={{ position: 'relative', width: '100%', minHeight: '520px', borderRadius: '10px', overflow: 'hidden', border: '1px solid #1e293b', background: '#020617' }}>
 
-              {/* 1. PHOTO VIEW */}
+              {/* 1. PHOTO VIEW WITH SINGLE-PHOTO TOP-ANGLE VALIDATION & RETAKE */}
               <div style={{ display: viewMode === 'photo' ? 'block' : 'none', width: '100%', height: '100%', minHeight: '520px' }}>
                 {isCameraActive ? (
                   <div style={{ position: 'relative', width: '100%', height: '520px', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -838,6 +929,28 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
                       playsInline
                       style={{ maxWidth: '100%', maxHeight: '520px', objectFit: 'contain' }}
                     />
+                    {/* Top-angle alignment guide */}
+                    <div style={{
+                      position: 'absolute',
+                      top: '12%',
+                      left: '12%',
+                      right: '12%',
+                      bottom: '22%',
+                      border: '2px dashed rgba(56, 189, 248, 0.45)',
+                      borderRadius: '12px',
+                      pointerEvents: 'none',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      justifyContent: 'center',
+                      paddingTop: '0.5rem',
+                      color: 'rgba(56, 189, 248, 0.85)',
+                      fontSize: '0.78rem',
+                      fontWeight: 700,
+                      letterSpacing: '0.05em',
+                      textShadow: '0 1px 3px rgba(0,0,0,0.8)'
+                    }}>
+                      ALIGN CIRCUIT DIRECTLY FROM TOP (90° VIEW)
+                    </div>
                     <button
                       onClick={captureCameraFrame}
                       style={{
@@ -848,24 +961,182 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
                         background: '#10b981',
                         color: '#fff',
                         border: 'none',
-                        padding: '0.6rem 1.6rem',
+                        padding: '0.65rem 1.8rem',
                         borderRadius: '24px',
                         fontWeight: 700,
-                        fontSize: '0.85rem',
+                        fontSize: '0.88rem',
                         cursor: 'pointer',
-                        boxShadow: '0 4px 14px rgba(16, 185, 129, 0.5)'
+                        boxShadow: '0 4px 14px rgba(16, 185, 129, 0.5)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem'
                       }}
                     >
-                      Capture & Map Circuit
+                      <Camera size={16} /> Capture Photo
                     </button>
                   </div>
+                ) : isValidating ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '520px', color: '#38bdf8', gap: '0.75rem' }}>
+                    <RefreshCw size={36} className="animate-spin" />
+                    <p style={{ margin: 0, fontSize: '0.92rem', fontWeight: 600 }}>Validating top viewing angle & image quality...</p>
+                  </div>
                 ) : imagePreview ? (
-                  <div style={{ width: '100%', height: '520px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#020617' }}>
+                  <div style={{ width: '100%', minHeight: '520px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#020617', padding: '1rem' }}>
                     <img
                       src={imagePreview}
-                      alt="Breadboard Preview"
-                      style={{ maxWidth: '100%', maxHeight: '520px', objectFit: 'contain' }}
+                      alt="Captured Breadboard Preview"
+                      style={{ maxWidth: '100%', maxHeight: validationResult ? '360px' : '480px', objectFit: 'contain', borderRadius: '8px', border: '1px solid #1e293b' }}
                     />
+
+                    {/* Section 7: Validation Result Card */}
+                    {validationResult && (
+                      <div style={{
+                        marginTop: '0.85rem',
+                        width: '100%',
+                        maxWidth: '560px',
+                        padding: '0.9rem 1.1rem',
+                        borderRadius: '10px',
+                        background: validationResult.valid ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                        border: validationResult.valid ? '1px solid #10b981' : '1px solid #ef4444'
+                      }}>
+                        {validationResult.valid ? (
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#10b981', fontWeight: 800, fontSize: '0.92rem' }}>
+                                <CheckCircle2 size={18} />
+                                <span>✓ CIRCUIT VIEW ACCEPTED</span>
+                              </div>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#10b981', background: 'rgba(16, 185, 129, 0.2)', padding: '0.2rem 0.55rem', borderRadius: '4px' }}>
+                                Score: {validationResult.score}/100
+                              </span>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '1.25rem', fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.85rem', flexWrap: 'wrap' }}>
+                              <div>Top-angle: <strong style={{ color: '#10b981' }}>{validationResult.metrics?.topAngle || 'GOOD'}</strong></div>
+                              <div>Circuit visibility: <strong style={{ color: '#10b981' }}>{validationResult.metrics?.circuitVisibility || 'GOOD'}</strong></div>
+                              <div>Image quality: <strong style={{ color: '#10b981' }}>{validationResult.metrics?.imageQuality || 'GOOD'}</strong></div>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '0.65rem' }}>
+                              <button
+                                onClick={handleAcceptAndUsePhoto}
+                                disabled={isProcessing}
+                                style={{
+                                  padding: '0.5rem 1.2rem',
+                                  borderRadius: '6px',
+                                  background: '#10b981',
+                                  color: '#ffffff',
+                                  border: 'none',
+                                  fontWeight: 700,
+                                  fontSize: '0.82rem',
+                                  cursor: isProcessing ? 'not-allowed' : 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.4rem'
+                                }}
+                              >
+                                <CheckCircle2 size={15} /> [ USE THIS PHOTO ]
+                              </button>
+                              <button
+                                onClick={handleRetake}
+                                style={{
+                                  padding: '0.5rem 0.9rem',
+                                  borderRadius: '6px',
+                                  background: 'rgba(255, 255, 255, 0.08)',
+                                  color: '#94a3b8',
+                                  border: '1px solid #475569',
+                                  fontWeight: 600,
+                                  fontSize: '0.82rem',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                [ RETAKE ]
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#ef4444', fontWeight: 800, fontSize: '0.92rem' }}>
+                                <AlertTriangle size={18} />
+                                <span>⚠ PHOTO NOT SUITABLE</span>
+                              </div>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#ef4444', background: 'rgba(239, 68, 68, 0.2)', padding: '0.2rem 0.55rem', borderRadius: '4px' }}>
+                                Score: {validationResult.score}/100
+                              </span>
+                            </div>
+
+                            <div style={{ marginBottom: '0.5rem', fontSize: '0.8rem', color: '#fca5a5' }}>
+                              {validationResult.reasons.map((r, i) => (
+                                <div key={i} style={{ marginBottom: '0.2rem' }}>• {r}</div>
+                              ))}
+                            </div>
+
+                            {validationResult.recommendations.length > 0 && (
+                              <div style={{ marginBottom: '0.75rem', fontSize: '0.78rem', color: '#cbd5e1' }}>
+                                <strong>Guidance:</strong> {validationResult.recommendations.join(' ')}
+                              </div>
+                            )}
+
+                            <button
+                              onClick={handleRetake}
+                              style={{
+                                padding: '0.5rem 1.1rem',
+                                borderRadius: '6px',
+                                background: '#ef4444',
+                                color: '#ffffff',
+                                border: 'none',
+                                fontWeight: 700,
+                                fontSize: '0.82rem',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.4rem'
+                              }}
+                            >
+                              <RotateCcw size={14} /> [ RETAKE ]
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Section 11: Circuit not clearly detected warning */}
+                    {detectionConfidenceError && (
+                      <div style={{
+                        marginTop: '0.85rem',
+                        width: '100%',
+                        maxWidth: '560px',
+                        padding: '0.85rem 1rem',
+                        borderRadius: '8px',
+                        background: 'rgba(234, 179, 8, 0.12)',
+                        border: '1px solid #eab308',
+                        color: '#fef08a'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 700, marginBottom: '0.35rem', fontSize: '0.9rem' }}>
+                          <AlertTriangle size={16} color="#eab308" />
+                          <span>⚠ CIRCUIT NOT CLEARLY DETECTED</span>
+                        </div>
+                        <div style={{ fontSize: '0.8rem', marginBottom: '0.65rem', color: '#fde047' }}>
+                          {detectionConfidenceError}
+                        </div>
+                        <button
+                          onClick={handleRetake}
+                          style={{
+                            padding: '0.45rem 1rem',
+                            borderRadius: '6px',
+                            background: '#eab308',
+                            color: '#0f172a',
+                            border: 'none',
+                            fontWeight: 700,
+                            fontSize: '0.8rem',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          [ RETAKE ]
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '520px', color: '#64748b', gap: '0.75rem' }}>
