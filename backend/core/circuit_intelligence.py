@@ -165,7 +165,7 @@ def map_terminal_to_exact_hole(
     terminal_pixel: Dict[str, float],
     img_w: int = 1280,
     img_h: int = 850,
-    max_distance_mm: float = 22.0,
+    max_distance_mm: float = 25.0,
     ambiguity_delta_mm: float = 2.5
 ) -> Dict[str, Any]:
     """

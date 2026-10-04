@@ -166,6 +166,15 @@ def read_root():
         "endpoints_count": 11
     }
 
+@app.get("/api/health")
+def api_health():
+    """Lightweight backend health check endpoint."""
+    return {
+        "status": "ok",
+        "service": "SmartBreadboard 3D FastAPI Backend",
+        "phase": "active"
+    }
+
 @app.get("/api/circuit/health")
 def circuit_health():
     detector = CompositeComponentDetector()
@@ -962,9 +971,20 @@ def get_lan_ip():
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
-        return {"lan_ip": ip, "port": 5173}
+        if ip and not ip.startswith("127.") and ip != "0.0.0.0":
+            return {"lan_ip": ip, "status": "ok"}
     except Exception:
-        return {"lan_ip": "127.0.0.1", "port": 5173}
+        pass
+
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            if not ip.startswith("127.") and not ip.startswith("169.254.") and ip != "0.0.0.0":
+                return {"lan_ip": ip, "status": "ok"}
+    except Exception:
+        pass
+
+    return {"lan_ip": None, "error": "Could not determine local LAN IP"}
 
 # In-memory single-photo scanner session store (Strictly ONE photo workflow)
 single_photo_sessions: Dict[str, Dict[str, Any]] = {}

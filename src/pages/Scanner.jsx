@@ -6,7 +6,7 @@ import { mockCircuits } from '../data/mockCircuits';
 import { useCircuit } from '../context/CircuitContext';
 import Breadboard3DCanvas from '../components/Breadboard3DCanvas';
 import PhotoCircuitMapper from '../components/PhotoCircuitMapper';
-import { API_BASE_URL, WS_BASE_URL, getMobileScannerUrl } from '../services/api.js';
+import { API_BASE_URL, WS_BASE_URL, getMobileScannerUrl, getFrontendPort, getWebSocketBaseUrl, isLanIp, isProduction } from '../services/api.js';
 import { validateCircuitImage } from '../services/scannerImageValidator.js';
 
 const CLASS_COLOR_BADGES = {
@@ -63,6 +63,11 @@ export default function Scanner() {
   const [sessionNotFound, setSessionNotFound] = useState(false);
   const [pollingActive, setPollingActive] = useState(true);
 
+  const currentPort = getFrontendPort();
+  const effectiveLanIp = isLanIp ? window.location.hostname : lanIp;
+  const backendBaseUrl = effectiveLanIp ? `http://${effectiveLanIp}:8000` : API_BASE_URL;
+  const wsBaseUrl = getWebSocketBaseUrl(backendBaseUrl);
+
   const handleGenerateNewSession = () => {
     const newId = Math.random().toString(36).substring(2, 8).toUpperCase();
     setSessionId(newId);
@@ -94,8 +99,8 @@ export default function Scanner() {
         console.warn("Could not fetch LAN IP:", e);
       });
 
-    // 2. Initialize / register the session on backend
-    fetch(`${API_BASE_URL}/api/scanner/session/${sessionId}/init`, {
+    // 2. Initialize / register the session on backend using the LAN / base URL
+    fetch(`${backendBaseUrl}/api/scanner/session/${sessionId}/init`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     })
@@ -117,7 +122,7 @@ export default function Scanner() {
     // 3. Connect WebSocket to receive single phone photo transmission
     let ws = null;
     try {
-      ws = new WebSocket(`${WS_BASE_URL}/ws/camera/${sessionId}?role=laptop`);
+      ws = new WebSocket(`${wsBaseUrl}/ws/camera/${sessionId}?role=laptop`);
       ws.onopen = () => {
         if (isMounted) setBackendStatus('connected');
       };
@@ -150,7 +155,7 @@ export default function Scanner() {
         return;
       }
       try {
-        const resp = await fetch(`${API_BASE_URL}/api/scanner/session/${sessionId}`);
+        const resp = await fetch(`${backendBaseUrl}/api/scanner/session/${sessionId}`);
         if (!isMounted) return;
 
         if (resp.status === 404) {
@@ -199,7 +204,7 @@ export default function Scanner() {
       clearInterval(interval);
       if (ws) ws.close();
     };
-  }, [sessionId, pollingActive]);
+  }, [sessionId, pollingActive, backendBaseUrl, wsBaseUrl]);
 
   const handleReceivedPhonePhoto = (photoData, isValid = true) => {
     setPhonePhotoReceived(true);
@@ -392,7 +397,19 @@ export default function Scanner() {
   const totalDetections = detections.length;
   const isRealActive = activeCircuit?.source === 'real';
 
-  const { url: mobileScannerUrl, error: qrUrlError } = getMobileScannerUrl(sessionId, lanIp);
+  const { url: mobileScannerUrl, error: qrUrlError } = getMobileScannerUrl(sessionId, effectiveLanIp);
+
+  // Diagnostic logging per Requirements 6 & 9
+  useEffect(() => {
+    if (mobileScannerUrl) {
+      console.log(`[QR] Generated URL: ${mobileScannerUrl}`);
+      console.log(`[QR] LAN IP: ${effectiveLanIp || 'detecting...'}`);
+      console.log(`[QR] Frontend Port: ${currentPort}`);
+      console.log(`[QR] Frontend URL: http://${effectiveLanIp || window.location.hostname}:${currentPort}`);
+      console.log(`[QR] Backend URL: ${backendBaseUrl}`);
+      console.log(`[QR] Session ID: ${sessionId}`);
+    }
+  }, [mobileScannerUrl, effectiveLanIp, currentPort, backendBaseUrl, sessionId]);
 
   return (
     <div style={{ paddingBottom: '2.5rem' }}>
@@ -618,10 +635,15 @@ export default function Scanner() {
                 Your phone will validate the image and instantly send it to this desktop scanner.
               </p>
               {mobileScannerUrl && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.75rem', color: '#38bdf8' }}>
-                  <Smartphone size={14} />
-                  <span>Reachable URL: <code style={{ color: '#bae6fd', background: 'rgba(56, 189, 248, 0.1)', padding: '0.15rem 0.4rem', borderRadius: '4px' }}>{mobileScannerUrl}</code></span>
-                </div>
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.75rem', color: '#38bdf8' }}>
+                    <Smartphone size={14} />
+                    <span>Reachable URL: <code style={{ color: '#bae6fd', background: 'rgba(56, 189, 248, 0.1)', padding: '0.15rem 0.4rem', borderRadius: '4px' }}>{mobileScannerUrl}</code></span>
+                  </div>
+                  <div style={{ marginTop: '0.35rem', fontSize: '0.7rem', color: '#64748b', fontFamily: 'monospace' }}>
+                    LAN: {effectiveLanIp || 'detecting...'} | Port: {currentPort} | Backend: {backendBaseUrl}
+                  </div>
+                </>
               )}
             </div>
           </div>

@@ -28,7 +28,7 @@ export default function MobileScanner() {
 
   const [isConnected, setIsConnected] = useState(false);
   const [sessionNotFound, setSessionNotFound] = useState(false);
-  const [backendDisconnected, setBackendDisconnected] = useState(false);
+  const [backendUnreachable, setBackendUnreachable] = useState(false);
   const [capturedPhoto, setCapturedPhoto] = useState(null);
   const [validationResult, setValidationResult] = useState(null);
   const [isValidating, setIsValidating] = useState(false);
@@ -41,44 +41,62 @@ export default function MobileScanner() {
   const mediaStreamRef = useRef(null);
   const wsRef = useRef(null);
 
+  const checkHealthAndConnect = async () => {
+    setBackendUnreachable(false);
+    setSessionNotFound(false);
+
+    // 1. Lightweight health check (Requirement 10)
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const healthResp = await fetch(`${API_BASE_URL}/api/health`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (!healthResp.ok) {
+        setBackendUnreachable(true);
+        return;
+      }
+    } catch (e) {
+      console.warn("Backend health check unreachable:", e);
+      setBackendUnreachable(true);
+      return;
+    }
+
+    // 2. Connect to Desktop Session via HTTP
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/scanner/session/${sessionId}/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      if (resp.status === 404) {
+        setSessionNotFound(true);
+        return;
+      }
+
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.success) {
+          setIsConnected(true);
+          setBackendUnreachable(false);
+          setSessionNotFound(false);
+        }
+      } else {
+        setBackendUnreachable(true);
+      }
+    } catch (err) {
+      console.warn("Could not connect to session endpoint:", err);
+      setBackendUnreachable(true);
+    }
+  };
+
   // 1. Establish connection to Desktop Session via WebSocket + HTTP
   useEffect(() => {
-    let isMounted = true;
+    checkHealthAndConnect();
 
-    const connectToSession = async () => {
-      try {
-        const resp = await fetch(`${API_BASE_URL}/api/scanner/session/${sessionId}/connect`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-        if (!isMounted) return;
-
-        if (resp.status === 404) {
-          setSessionNotFound(true);
-          return;
-        }
-
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data && data.success) {
-            setIsConnected(true);
-            setBackendDisconnected(false);
-            setSessionNotFound(false);
-          }
-        } else {
-          setBackendDisconnected(true);
-        }
-      } catch (err) {
-        if (!isMounted) return;
-        console.warn("Could not connect to session endpoint:", err);
-        setBackendDisconnected(true);
-      }
-    };
-
-    connectToSession();
-
-    // Connect WebSocket
+    // Connect WebSocket (Requirement 11: ws://<LAN_IP>:8000/ws/camera/<SESSION_ID>?role=phone)
     try {
       const wsUrl = `${WS_BASE_URL}/ws/camera/${sessionId}?role=phone`;
       const ws = new WebSocket(wsUrl);
@@ -86,9 +104,10 @@ export default function MobileScanner() {
 
       ws.onopen = () => {
         setIsConnected(true);
+        setBackendUnreachable(false);
       };
       ws.onerror = (e) => {
-        console.warn("WebSocket connection error:", e);
+        console.warn("WebSocket connection warning:", e);
       };
       ws.onclose = () => {
         // ws closed
@@ -286,21 +305,21 @@ export default function MobileScanner() {
           borderRadius: '12px',
           background: sessionNotFound
             ? 'rgba(239, 68, 68, 0.15)'
-            : backendDisconnected
+            : backendUnreachable
               ? 'rgba(239, 68, 68, 0.15)'
               : isConnected
                 ? 'rgba(34, 197, 94, 0.15)'
                 : 'rgba(234, 179, 8, 0.15)',
           color: sessionNotFound
             ? '#ef4444'
-            : backendDisconnected
+            : backendUnreachable
               ? '#ef4444'
               : isConnected
                 ? '#4ade80'
                 : '#facc15',
           border: sessionNotFound
             ? '1px solid #ef4444'
-            : backendDisconnected
+            : backendUnreachable
               ? '1px solid #ef4444'
               : isConnected
                 ? '1px solid #22c55e'
@@ -310,13 +329,13 @@ export default function MobileScanner() {
             width: '6px',
             height: '6px',
             borderRadius: '50%',
-            background: (sessionNotFound || backendDisconnected) ? '#ef4444' : isConnected ? '#4ade80' : '#facc15'
+            background: (sessionNotFound || backendUnreachable) ? '#ef4444' : isConnected ? '#4ade80' : '#facc15'
           }} />
           <span>
             {sessionNotFound
               ? 'SESSION NOT FOUND'
-              : backendDisconnected
-                ? 'BACKEND DISCONNECTED'
+              : backendUnreachable
+                ? 'BACKEND UNREACHABLE'
                 : isConnected
                   ? 'Connected to Desktop'
                   : 'Connecting to Desktop...'}
@@ -347,32 +366,48 @@ export default function MobileScanner() {
               Please scan the active QR code currently displayed on your computer screen.
             </p>
           </div>
-        ) : backendDisconnected ? (
+        ) : backendUnreachable ? (
           <div style={{
             padding: '1.25rem',
             borderRadius: '12px',
             background: 'rgba(239, 68, 68, 0.12)',
             border: '1px solid #ef4444',
             color: '#fca5a5',
-            textAlign: 'center',
             margin: '1.5rem 0'
           }}>
-            <AlertTriangle size={32} style={{ margin: '0 auto 0.5rem', color: '#ef4444' }} />
-            <h2 style={{ fontSize: '1rem', fontWeight: 800, margin: '0 0 0.4rem 0', color: '#ef4444' }}>
-              BACKEND DISCONNECTED
+            <AlertTriangle size={32} style={{ margin: '0 auto 0.5rem', color: '#ef4444', display: 'block' }} />
+            <h2 style={{ fontSize: '1.05rem', fontWeight: 800, margin: '0 0 0.4rem 0', color: '#ef4444', textAlign: 'center' }}>
+              BACKEND UNREACHABLE
             </h2>
-            <p style={{ fontSize: '0.82rem', color: '#cbd5e1', margin: '0 0 0.8rem 0' }}>
-              Cannot reach the FastAPI backend at <code style={{ color: '#fca5a5' }}>{API_BASE_URL}</code>.
+            <p style={{ fontSize: '0.82rem', color: '#cbd5e1', margin: '0 0 0.75rem 0', textAlign: 'center' }}>
+              Cannot reach the FastAPI backend at <code style={{ color: '#fca5a5', fontWeight: 'bold' }}>{API_BASE_URL}</code>.
             </p>
+            <div style={{
+              background: 'rgba(15, 23, 42, 0.6)',
+              padding: '0.75rem',
+              borderRadius: '8px',
+              fontSize: '0.78rem',
+              color: '#cbd5e1',
+              lineHeight: 1.6,
+              marginBottom: '1rem'
+            }}>
+              <div style={{ fontWeight: 700, color: '#f8fafc', marginBottom: '0.25rem' }}>Please check:</div>
+              <div>• Phone and PC are on same Wi-Fi</div>
+              <div>• Backend is running</div>
+              <div>• Port 8000 is accessible</div>
+              <div>• Windows Firewall allows Python/Uvicorn</div>
+            </div>
             <button
-              onClick={() => window.location.reload()}
+              onClick={checkHealthAndConnect}
               style={{
-                padding: '0.45rem 1rem',
+                width: '100%',
+                padding: '0.55rem 1rem',
                 borderRadius: '8px',
                 background: '#ef4444',
                 color: '#fff',
                 border: 'none',
                 fontWeight: 700,
+                fontSize: '0.85rem',
                 cursor: 'pointer'
               }}
             >

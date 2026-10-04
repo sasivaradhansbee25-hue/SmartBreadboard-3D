@@ -103,38 +103,38 @@ export function validateSupply(circuitState, positiveNode, groundNode, voltage) 
     };
   }
 
-  // Circuit-level ambiguity check
-  if (circuitState.status === 'AMBIGUOUS' || circuitState.simulation_readiness_reason === 'AMBIGUOUS_TERMINAL_MAPPING') {
+  // Circuit-level ambiguity / verification check
+  if (circuitState.status === 'AMBIGUOUS' || circuitState.status === 'UNVERIFIED' || circuitState.simulation_readiness_reason === 'AMBIGUOUS_TERMINAL_MAPPING' || circuitState.simulation_readiness_reason === 'CIRCUIT_CONNECTIONS_NOT_VERIFIED') {
     return {
       valid: false,
       status: SUPPLY_STATUS.BLOCKED,
       reason: REASON_CODES.AMBIGUOUS_CIRCUIT,
-      message: 'Circuit mapping is ambiguous. Resolve all component terminals before configuring power.'
+      message: 'Circuit connections not verified. Reconstruct or retake photo before configuring power.'
     };
   }
 
-  // Unknown component check
+  // Unknown or unverified component check
   const components = circuitState.components || [];
   for (const c of components) {
     const type = String(c.type || c.class || '').toUpperCase();
     const status = String(c.status || '').toUpperCase();
-    if (type === 'UNKNOWN' || status === 'UNKNOWN' || status === 'AMBIGUOUS') {
+    if (type === 'UNKNOWN' || status === 'UNKNOWN' || status === 'AMBIGUOUS' || status === 'UNVERIFIED') {
       return {
         valid: false,
         status: SUPPLY_STATUS.BLOCKED,
         reason: REASON_CODES.UNKNOWN_COMPONENT,
-        message: `Circuit contains unknown component ${c.id || 'unnamed'}. Resolve component type first.`
+        message: `Circuit component ${c.id || 'unnamed'} has unverified connections. Cannot simulate.`
       };
     }
     // Check terminals
     if (Array.isArray(c.terminals)) {
       for (const t of c.terminals) {
-        if (!t.hole || t.node === 'UNRESOLVED') {
+        if (!t.hole || t.node === 'UNRESOLVED' || t.status === 'UNVERIFIED') {
           return {
             valid: false,
             status: SUPPLY_STATUS.BLOCKED,
             reason: REASON_CODES.AMBIGUOUS_CIRCUIT,
-            message: `Component ${c.id} has unmapped terminal ${t.terminal}.`
+            message: `Component ${c.id} has unmapped or unverified terminal ${t.terminal || t.pin}.`
           };
         }
       }

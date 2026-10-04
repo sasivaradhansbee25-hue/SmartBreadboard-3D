@@ -6,7 +6,7 @@ and constructs the Circuit Data Model JSON netlist per SPEC.md Section 9.
 
 import re
 from datetime import datetime
-from cv.breadboard_grid import extract_component_lead_positions, extract_component_lead_positions_verbose
+from cv.breadboard_grid import extract_component_lead_positions, extract_component_lead_positions_verbose, estimate_component_orientation
 from cv.value_consensus import extract_value_consensus_from_crop, build_fallback_response
 from core.wire_connectivity import build_electrical_connectivity, get_base_node_for_hole
 from core.circuit_validator import validate_circuit
@@ -192,19 +192,49 @@ def build_netlist_from_detections(detections: list[dict], resistor_analyses: lis
         dist1 = d.get("dist1", 2.5)
         dist2 = d.get("dist2", 2.5)
 
+        orient_info = estimate_component_orientation(bbox, c_type)
+        orient_deg = float(orient_info.get("angle_deg", 0.0))
+        cx = round((bbox[0] + bbox[2]) / 2.0, 1)
+        cy = round((bbox[1] + bbox[3]) / 2.0, 1)
+
+        t1_name = "terminal_a" if c_type in ["resistor", "capacitor", "inductor"] else ("anode" if c_type in ["led", "diode_rectifier"] else "start")
+        t2_name = "terminal_b" if c_type in ["resistor", "capacitor", "inductor"] else ("cathode" if c_type in ["led", "diode_rectifier"] else "end")
+
+        terminals_list = [
+            {
+                "pin": 1,
+                "terminal": t1_name,
+                "hole": hole1,
+                "node": raw_node1,
+                "status": "VERIFIED" if not is_uncertain else "UNVERIFIED"
+            },
+            {
+                "pin": 2,
+                "terminal": t2_name,
+                "hole": hole2,
+                "node": raw_node2,
+                "status": "VERIFIED" if not is_uncertain else "UNVERIFIED"
+            }
+        ]
+
         processed_components.append({
             "id": c_id,
             "designator": designator,
             "type": c_type,
             "bbox": bbox,
+            "boundingBox": bbox,
+            "center": {"x": cx, "y": cy},
+            "orientation": orient_deg,
             "start_hole": hole1,
             "end_hole": hole2,
             "hole1": hole1,
             "hole2": hole2,
+            "terminals": terminals_list,
             "confidence": round(conf, 2),
             "mapping_confidence": round(map_conf, 2),
             "uncertain_mapping": is_uncertain,
             "is_uncertain": is_uncertain,
+            "status": "VERIFIED" if not is_uncertain else "UNVERIFIED",
             "mapping_reason": map_reason,
             "reason": map_reason,
             "sub_scores": sub_scores,

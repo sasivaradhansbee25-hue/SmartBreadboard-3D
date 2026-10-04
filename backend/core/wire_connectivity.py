@@ -197,6 +197,10 @@ def build_electrical_connectivity(components: List[Dict[str, Any]], breadboard_h
         comp["node1"] = net1
         comp["node2"] = net2
 
+        if comp.get("terminals") and len(comp["terminals"]) >= 2:
+            comp["terminals"][0]["node"] = net1
+            comp["terminals"][1]["node"] = net2
+
         # Pin objects
         pin1_obj = {
             "component": des,

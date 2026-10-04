@@ -1489,6 +1489,12 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
     // =========================================================
 
     function getHolePair(component) {
+      if (!component) return { hole1: null, hole2: null };
+
+      // 1. Array of terminals: [{ pin: 1, hole: "A15" }, { pin: 2, hole: "A20" }]
+      const termArr = Array.isArray(component.terminals) ? component.terminals : null;
+      // 2. Object of terminals: { terminal_a: { hole: "A15" }, terminal_b: { hole: "A20" } }
+      const termObj = (!termArr && typeof component.terminals === 'object' && component.terminals !== null) ? component.terminals : null;
 
       const hole1 =
         component.hole1 ||
@@ -1496,7 +1502,14 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
         component.lead1_hole ||
         component.start_hole ||
         component.from_hole ||
-        component.node1?.hole;
+        component.node1?.hole ||
+        component.hole_mapping?.terminal_a ||
+        component.hole_mapping?.hole1 ||
+        component.hole_mapping?.start ||
+        (termArr && (termArr[0]?.hole || termArr[0]?.hole_id)) ||
+        (termObj && (termObj.terminal_a?.hole || termObj.start?.hole || termObj.anode?.hole || termObj.pin1?.hole)) ||
+        (Array.isArray(component.pins) && component.pins[0]?.hole) ||
+        (Array.isArray(component.leads) && component.leads[0]?.hole);
 
       const hole2 =
         component.hole2 ||
@@ -1504,11 +1517,18 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
         component.lead2_hole ||
         component.end_hole ||
         component.to_hole ||
-        component.node2?.hole;
+        component.node2?.hole ||
+        component.hole_mapping?.terminal_b ||
+        component.hole_mapping?.hole2 ||
+        component.hole_mapping?.end ||
+        (termArr && (termArr[1]?.hole || termArr[1]?.hole_id)) ||
+        (termObj && (termObj.terminal_b?.hole || termObj.end?.hole || termObj.cathode?.hole || termObj.pin2?.hole)) ||
+        (Array.isArray(component.pins) && component.pins[1]?.hole) ||
+        (Array.isArray(component.leads) && component.leads[1]?.hole);
 
       return {
-        hole1,
-        hole2
+        hole1: typeof hole1 === 'string' ? hole1.trim().toUpperCase() : null,
+        hole2: typeof hole2 === 'string' ? hole2.trim().toUpperCase() : null
       };
     }
 
@@ -1525,16 +1545,6 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
     const animatedLeds = [];
     const animatedComponents = [];
 
-    console.log(
-      '[3D] Circuit:',
-      circuit
-    );
-
-    console.log(
-      '[3D] Components:',
-      components
-    );
-
     components.forEach(
       (component, index) => {
 
@@ -1545,9 +1555,14 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
           getHolePair(component);
 
         if (!hole1 || !hole2) {
+          // If component is explicitly marked UNVERIFIED / UNRESOLVED / UNKNOWN, skip 3D creation cleanly
+          const status = String(component.status || '').toUpperCase();
+          if (status === 'UNVERIFIED' || status === 'UNRESOLVED' || status === 'UNKNOWN' || status === 'BLOCKED') {
+            return;
+          }
 
           console.warn(
-            `[3D] Component ${index} has no hole mapping`,
+            `[3D] Component ${component.id || component.designator || index} has no hole mapping (marked UNVERIFIED)`,
             component
           );
 
@@ -1568,14 +1583,6 @@ export default function Breadboard3DCanvas({ circuit: propCircuit }) {
             ''
           )
             .toLowerCase();
-
-        console.log(
-          `[3D] Rendering ${type}`,
-          hole1,
-          hole2,
-          p1,
-          p2
-        );
 
         let wireCurve = null;
 

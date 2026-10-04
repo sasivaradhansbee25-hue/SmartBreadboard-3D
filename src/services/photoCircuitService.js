@@ -230,10 +230,21 @@ export function formatPipelineResultForCircuitContext(pipelineResult, originalIm
   if (!pipelineResult) return null;
 
   const comps = (pipelineResult.components || []).map((c, idx) => {
-    const tA = c.start_hole || c.hole1 || c.terminals?.[0]?.hole || 'A1';
-    const tB = c.end_hole || c.hole2 || c.terminals?.[1]?.hole || 'A2';
-    const nA = c.terminals?.[0]?.node || c.node1 || 'NODE_1';
-    const nB = c.terminals?.[1]?.node || c.node2 || 'NODE_2';
+    const term1 = c.terminals?.[0] || {};
+    const term2 = c.terminals?.[1] || {};
+    const tA = c.start_hole || c.hole1 || term1.hole || null;
+    const tB = c.end_hole || c.hole2 || term2.hole || null;
+    const nA = term1.node || c.node1 || (tA ? 'NODE_1' : 'UNRESOLVED');
+    const nB = term2.node || c.node2 || (tB ? 'NODE_2' : 'UNRESOLVED');
+
+    const isVerified = Boolean(tA && tB && c.status !== 'UNVERIFIED' && c.status !== 'UNRESOLVED' && c.status !== 'UNKNOWN');
+    const compStatus = isVerified ? (c.status || 'VERIFIED') : (c.status || 'UNVERIFIED');
+
+    const bbox = c.bbox || c.boundingBox || [0, 0, 100, 100];
+    const center = c.center || {
+      x: Math.round(((bbox[0] || 0) + (bbox[2] || 0)) / 2),
+      y: Math.round(((bbox[1] || 0) + (bbox[3] || 0)) / 2)
+    };
 
     return {
       id: c.id,
@@ -254,14 +265,16 @@ export function formatPipelineResultForCircuitContext(pipelineResult, originalIm
       unit: c.unit || (c.type === 'resistor' ? 'Ω' : (c.type === 'inductor' ? 'H' : (c.type === 'capacitor' ? 'F' : (c.type === 'led' ? 'V' : (c.type === 'motor' ? 'HP' : 'Ω'))))),
       displayValue: c.displayValue || c.formatted_value || `${c.value ?? c.nominal_value ?? ''} ${c.unit || ''}`.trim(),
       formatted_value: c.formatted_value || c.displayValue || `${c.value ?? c.nominal_value ?? ''} ${c.unit || ''}`.trim(),
-      status: c.status || 'VERIFIED',
+      status: compStatus,
       confidence: c.confidence || 0.95,
-      bbox: c.bbox,
+      bbox: bbox,
+      boundingBox: bbox,
+      center: center,
       position: c.position || { u: 0.5, v: 0.5 },
       orientation: c.orientation || 0.0,
       terminals: c.terminals || [
-        { terminal: 'terminal_a', name: 'terminal_a', hole: tA, node: nA, status: 'VERIFIED' },
-        { terminal: 'terminal_b', name: 'terminal_b', hole: tB, node: nB, status: 'VERIFIED' }
+        { pin: 1, terminal: 'terminal_a', name: 'terminal_a', hole: tA, node: nA, status: tA ? 'VERIFIED' : 'UNVERIFIED' },
+        { pin: 2, terminal: 'terminal_b', name: 'terminal_b', hole: tB, node: nB, status: tB ? 'VERIFIED' : 'UNVERIFIED' }
       ]
     };
   });
@@ -278,7 +291,11 @@ export function formatPipelineResultForCircuitContext(pipelineResult, originalIm
     circuit_source: 'REAL_SCANNED_CIRCUIT',
     is_scanned: true,
     isRealScanned: true,
-    netlist: {
+    netlist: pipelineResult.netlist ? {
+      ...pipelineResult.netlist,
+      components: pipelineResult.netlist.components || comps,
+      nodes: pipelineResult.netlist.nodes || pipelineResult.nodes || []
+    } : {
       circuit_id: `circ_${signature}`,
       name: 'User Scanned Physical Circuit',
       source: pipelineResult.source || 'real',

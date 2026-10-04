@@ -139,13 +139,37 @@ export function calculateComponentAnchor(component, displayRect) {
     cy = (component.t1_img[1] + component.t2_img[1]) / 2.0;
     t1Screen = cameraPixelToScreenCoord(component.t1_img[0], component.t1_img[1], displayRect);
     t2Screen = cameraPixelToScreenCoord(component.t2_img[0], component.t2_img[1], displayRect);
+  } else if (Array.isArray(component.terminals) && component.terminals.length >= 2 && component.terminals[0]?.pixel && component.terminals[1]?.pixel) {
+    const p1 = component.terminals[0].pixel;
+    const p2 = component.terminals[1].pixel;
+    cx = (p1.x + p2.x) / 2.0;
+    cy = (p1.y + p2.y) / 2.0;
+    t1Screen = cameraPixelToScreenCoord(p1.x, p1.y, displayRect);
+    t2Screen = cameraPixelToScreenCoord(p2.x, p2.y, displayRect);
+  } else if (component.center && typeof component.center.x === 'number' && typeof component.center.y === 'number') {
+    cx = component.center.x;
+    cy = component.center.y;
   } else if (component.center_x !== undefined && component.center_y !== undefined) {
     cx = component.center_x;
     cy = component.center_y;
-  } else if (component.bbox || component.bbox_pixels) {
-    const b = component.bbox || component.bbox_pixels;
+  } else if (component.bbox || component.bbox_pixels || component.boundingBox) {
+    const b = component.bbox || component.bbox_pixels || component.boundingBox;
     cx = (b[0] + b[2]) / 2.0;
     cy = (b[1] + b[3]) / 2.0;
+  }
+
+  // Derive t1Screen / t2Screen from bounding box if not yet resolved
+  if (!t1Screen && !t2Screen && (component.bbox || component.bbox_pixels || component.boundingBox)) {
+    const b = component.bbox || component.bbox_pixels || component.boundingBox;
+    const bw = Math.max(1, b[2] - b[0]);
+    const bh = Math.max(1, b[3] - b[1]);
+    const isHoriz = bw >= bh;
+    const p1x = isHoriz ? b[0] + 0.1 * bw : cx;
+    const p1y = isHoriz ? cy : b[1] + 0.1 * bh;
+    const p2x = isHoriz ? b[2] - 0.1 * bw : cx;
+    const p2y = isHoriz ? cy : b[3] - 0.1 * bh;
+    t1Screen = cameraPixelToScreenCoord(p1x, p1y, displayRect);
+    t2Screen = cameraPixelToScreenCoord(p2x, p2y, displayRect);
   }
 
   const anchorScreen = cameraPixelToScreenCoord(cx, cy, displayRect);

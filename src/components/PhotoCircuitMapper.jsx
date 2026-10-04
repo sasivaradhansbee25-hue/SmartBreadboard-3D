@@ -39,6 +39,7 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
   const {
     activeCircuit,
     setRealCircuitData,
+    uploadedImage,
     setUploadedImage,
     simulationStatus,
     simulationResult,
@@ -79,6 +80,15 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
   const fileInputRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const arContainerRef = useRef(null);
+  const arImageRef = useRef(null);
+
+  // Sync uploaded image from context if populated by QR or Scanner
+  useEffect(() => {
+    if (uploadedImage && !imagePreview) {
+      setImagePreview(uploadedImage);
+      setCapturedImage(uploadedImage);
+    }
+  }, [uploadedImage, imagePreview]);
 
   // Cleanup camera stream on unmount
   useEffect(() => {
@@ -405,6 +415,33 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
   const verifiedCount = components.filter(c => c.status === 'VERIFIED').length;
   const ambiguousCount = components.filter(c => c.status === 'AMBIGUOUS').length;
 
+  const unverifiedComponents = useMemo(() => {
+    return components.filter(c => c.status === 'UNVERIFIED' || c.status === 'UNKNOWN');
+  }, [components]);
+
+  const isConnectionsUnverified = useMemo(() => {
+    return (
+      pipelineResult?.status === 'UNVERIFIED' ||
+      pipelineResult?.simulation_readiness_reason === 'CIRCUIT_CONNECTIONS_NOT_VERIFIED' ||
+      unverifiedComponents.length > 0
+    );
+  }, [pipelineResult, unverifiedComponents]);
+
+  // Section 14: 10 Explicit Lifecycle Stages & Failed State Identification
+  const currentPipelineStage = useMemo(() => {
+    if (errorMessage) return { text: 'ERROR', isError: true, desc: errorMessage };
+    if (isConnectionsUnverified) return { text: 'CIRCUIT CONNECTIONS NOT VERIFIED', isError: true, desc: 'Component terminal mapping could not be reliably verified.' };
+    if (detectionConfidenceError) return { text: 'COMPONENT DETECTION FAILED', isError: true, desc: detectionConfidenceError };
+    if (simulationStatus === 'SOLVED') return { text: '10. SIMULATION READY', isError: false, desc: 'Real circuit electrical simulation solved' };
+    if (viewMode === 'ar') return { text: '9. AR READY', isError: false, desc: 'AR overlay active over physical photo reference' };
+    if (simulationStatus === 'RUNNING') return { text: '8. STARTING SIMULATION', isError: false, desc: 'Calculating node voltages & currents' };
+    if (viewMode === '3d' || (pipelineResult?.status === 'READY' && activeCircuit)) return { text: '7. BUILDING 3D MODEL', isError: false, desc: 'Rendering digital twin on canonical breadboard' };
+    if (isProcessing) return { text: '4. DETECTING COMPONENTS & 5. MAPPING CONNECTIONS', isError: false, desc: 'AI object detection & pin-to-hole registration' };
+    if (acceptedCircuitImage || (validationResult && validationResult.valid)) return { text: '3. IMAGE ACCEPTED', isError: false, desc: 'Top-angle photo verified' };
+    if (isValidating) return { text: '2. VALIDATING IMAGE', isError: false, desc: 'Checking sharpness, angle & circuit visibility' };
+    return { text: '1. WAITING FOR IMAGE', isError: false, desc: 'Ready for top-angle breadboard photo' };
+  }, [errorMessage, isConnectionsUnverified, detectionConfidenceError, simulationStatus, viewMode, activeCircuit, pipelineResult, isProcessing, acceptedCircuitImage, validationResult, isValidating]);
+
   // Selected Component for Instantaneous Readout (Requirement 9)
   const inspectedComp = useMemo(() => {
     if (selectedComponent) return selectedComponent;
@@ -562,6 +599,23 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
               }}>
                 ⚠ PHYSICAL VALIDATION NOT PERFORMED
               </div>
+
+              {/* Section 14: Lifecycle Stage Badge */}
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.2rem 0.6rem',
+                borderRadius: '6px',
+                background: currentPipelineStage.isError ? 'rgba(239, 68, 68, 0.2)' : 'rgba(56, 189, 248, 0.2)',
+                border: currentPipelineStage.isError ? '1px solid #ef4444' : '1px solid #38bdf8',
+                color: currentPipelineStage.isError ? '#fca5a5' : '#7dd3fc',
+                fontSize: '0.72rem',
+                fontWeight: 800,
+                letterSpacing: '0.04em'
+              }}>
+                <span>STAGE: {currentPipelineStage.text}</span>
+              </div>
             </div>
 
             <h1 style={{ margin: 0, fontSize: '1.45rem', fontWeight: 800, color: '#f8fafc', letterSpacing: '-0.02em' }}>
@@ -674,6 +728,57 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
           })}
         </div>
       </div>
+
+      {/* Section 8 & 14: Circuit Connections Not Verified Banner */}
+      {isConnectionsUnverified && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.15)',
+          border: '1px solid #ef4444',
+          color: '#fca5a5',
+          padding: '0.85rem 1.25rem',
+          borderRadius: '10px',
+          marginBottom: '1.25rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '1rem',
+          fontSize: '0.85rem',
+          boxShadow: '0 4px 14px rgba(239, 68, 68, 0.15)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+            <AlertTriangle size={20} color="#ef4444" style={{ flexShrink: 0, marginTop: '2px' }} />
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#f87171', marginBottom: '0.25rem' }}>
+                CIRCUIT CONNECTIONS NOT VERIFIED
+              </div>
+              <div style={{ color: '#fecaca', fontSize: '0.82rem' }}>
+                {pipelineResult?.message || (unverifiedComponents.length > 0
+                  ? `Component(s) ${unverifiedComponents.map(c => c.id || c.designator).join(', ')} could not be confidently mapped to breadboard holes or have conflicting connections.`
+                  : 'Physical breadboard connections could not be verified from this photo angle.')}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleRetake}
+            style={{
+              padding: '0.5rem 1.1rem',
+              borderRadius: '6px',
+              background: '#ef4444',
+              color: '#ffffff',
+              border: 'none',
+              fontWeight: 700,
+              fontSize: '0.82rem',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              flexShrink: 0
+            }}
+          >
+            <RotateCcw size={14} /> [ RETAKE ]
+          </button>
+        </div>
+      )}
 
       {/* Requirement 12: Clear Error Handling Banners */}
       {simulationStatus === 'BLOCKED' && (
@@ -805,10 +910,7 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
                 </button>
 
                 <button
-                  onClick={() => {
-                    setViewMode('ar');
-                    if (!isCameraActive) startCamera();
-                  }}
+                  onClick={() => setViewMode('ar')}
                   style={{
                     padding: '0.45rem 0.9rem',
                     borderRadius: '8px',
@@ -1158,33 +1260,38 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
                 )}
               </div>
 
-              {/* 3. AR CAMERA VIEW */}
+              {/* 3. AR CAMERA & REAL PHOTO OVERLAY VIEW */}
               <div style={{ display: viewMode === 'ar' ? 'block' : 'none', width: '100%', height: '520px', position: 'relative' }} ref={arContainerRef}>
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'contain',
-                    display: isCameraActive ? 'block' : 'none'
-                  }}
-                />
-                <ARCameraOverlay
-                  videoRef={videoRef}
-                  containerRef={arContainerRef}
-                  trackedComponents={activeCircuit?.components || pipelineResult?.components || []}
-                  visualGroundingState={currentVisualGroundingState}
-                  isActive={viewMode === 'ar' && isCameraActive}
-                  videoWidth={1280}
-                  videoHeight={720}
-                />
-                {!isCameraActive && (
+                {isCameraActive ? (
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'contain',
+                      display: 'block'
+                    }}
+                  />
+                ) : (imagePreview || uploadedImage) ? (
+                  <img
+                    ref={arImageRef}
+                    src={imagePreview || uploadedImage}
+                    alt="AR Real Circuit Reference"
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'contain',
+                      display: 'block',
+                      background: '#020617'
+                    }}
+                  />
+                ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '1rem', color: '#94a3b8' }}>
                     <Smartphone size={38} color="#38bdf8" />
-                    <span style={{ fontSize: '0.88rem' }}>AR Camera is currently inactive. Click below to start live stream overlay.</span>
+                    <span style={{ fontSize: '0.88rem' }}>Upload a circuit photo or start the live camera for AR overlay.</span>
                     <button
                       onClick={startCamera}
                       style={{
@@ -1202,6 +1309,16 @@ export default function PhotoCircuitMapper({ onComplete = null }) {
                     </button>
                   </div>
                 )}
+                <ARCameraOverlay
+                  videoRef={isCameraActive ? videoRef : null}
+                  imageRef={!isCameraActive ? arImageRef : null}
+                  containerRef={arContainerRef}
+                  trackedComponents={activeCircuit?.components || pipelineResult?.components || []}
+                  visualGroundingState={currentVisualGroundingState}
+                  isActive={viewMode === 'ar'}
+                  videoWidth={1280}
+                  videoHeight={720}
+                />
               </div>
             </div>
 

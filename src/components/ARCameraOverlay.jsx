@@ -32,6 +32,7 @@ import {
 
 export default function ARCameraOverlay({
   videoRef,
+  imageRef,
   containerRef,
   trackedComponents = [],
   registration = null,
@@ -198,9 +199,18 @@ export default function ARCameraOverlay({
       return;
     }
 
-    // Compute exact video display rectangle with letterbox handling
-    const vWidth = (video && video.videoWidth > 0) ? video.videoWidth : videoWidth;
-    const vHeight = (video && video.videoHeight > 0) ? video.videoHeight : videoHeight;
+    // Compute exact video or image display rectangle with letterbox handling
+    const imgElem = imageRef?.current;
+    const vWidth = (video && video.videoWidth > 0)
+      ? video.videoWidth
+      : (imgElem && (imgElem.naturalWidth || imgElem.width) > 0
+        ? (imgElem.naturalWidth || imgElem.width)
+        : videoWidth);
+    const vHeight = (video && video.videoHeight > 0)
+      ? video.videoHeight
+      : (imgElem && (imgElem.naturalHeight || imgElem.height) > 0
+        ? (imgElem.naturalHeight || imgElem.height)
+        : videoHeight);
     const displayRect = calculateVideoDisplayRect(width, height, vWidth, vHeight, 'contain');
 
     particleOffsetRef.current = (particleOffsetRef.current + 0.02) % 1.0;

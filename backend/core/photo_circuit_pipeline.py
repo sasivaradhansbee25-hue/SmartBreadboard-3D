@@ -497,7 +497,7 @@ def map_photo_to_circuit(
         mapped_terminals = []
         comp_status = "VERIFIED"
 
-        for term in terminals_model:
+        for term_idx, term in enumerate(terminals_model):
             t_name = term["terminal"]
             h_assigned = term.get("hole")
             t_status = "VERIFIED"
@@ -505,7 +505,12 @@ def map_photo_to_circuit(
             alt_holes = []
 
             # Check if forced ambiguous from candidate metadata
-            if det.get("status") == "AMBIGUOUS" or det.get("is_ambiguous") or det.get("ambiguous_terminal") == t_name:
+            is_term_ambiguous = (
+                det.get("ambiguous_terminal") == t_name or
+                (not det.get("ambiguous_terminal") and (det.get("status") == "AMBIGUOUS" or det.get("is_ambiguous")))
+            )
+
+            if is_term_ambiguous:
                 t_status = "AMBIGUOUS"
                 t_reason = f"Terminal '{t_name}' coordinates ambiguous between adjacent holes"
                 alt_holes = det.get("possible_holes") or [h_assigned or "E15", "E16"]
@@ -525,10 +530,12 @@ def map_photo_to_circuit(
                 has_ambiguous_terminals = True
                 diagnostics.append(f"{cid}.{t_name} mapping ambiguous: {t_reason}")
             elif t_status != "VERIFIED" or not h_assigned:
-                comp_status = "UNRESOLVED"
-                diagnostics.append(f"{cid}.{t_name} could not be reliably mapped to a hole.")
+                if comp_status != "AMBIGUOUS":
+                    comp_status = "UNVERIFIED"
+                diagnostics.append(f"{cid}.{t_name} could not be reliably mapped to a hole (UNVERIFIED).")
 
             mapped_terminals.append({
+                "pin": term_idx + 1,
                 "terminal": t_name,
                 "hole": h_assigned,
                 "node": None, # Will be populated during electrical node building
@@ -536,6 +543,14 @@ def map_photo_to_circuit(
                 "alternate_holes": alt_holes if alt_holes else None,
                 "reason": t_reason
             })
+
+        h1 = mapped_terminals[0]["hole"] if len(mapped_terminals) > 0 else None
+        h2 = mapped_terminals[1]["hole"] if len(mapped_terminals) > 1 else None
+
+        # Impossible self-connection check (only when not ambiguous)
+        if h1 and h2 and h1 == h2 and comp_status == "VERIFIED" and norm_type not in ["ic_chip", "ic"]:
+            comp_status = "UNVERIFIED"
+            diagnostics.append(f"{cid}: Terminals mapped to identical hole '{h1}' (impossible self-connection)")
 
         if comp_status == "VERIFIED":
             has_verified_components = True
@@ -545,10 +560,15 @@ def map_photo_to_circuit(
             "type": norm_type,
             "confidence": conf,
             "bbox": [x1, y1, x2, y2],
+            "boundingBox": [x1, y1, x2, y2],
             "center": {"x": cx, "y": cy},
             "orientation": orient_deg,
             "source": source,
             "status": comp_status,
+            "start_hole": h1,
+            "end_hole": h2,
+            "hole1": h1,
+            "hole2": h2,
             "terminals": mapped_terminals
         })
 
@@ -556,8 +576,10 @@ def map_photo_to_circuit(
     dsu = DisjointSetUnion()
     node_to_pins: Dict[str, List[str]] = {}
 
-    # Register each terminal's canonical base tie-point
+    # Register each terminal's canonical base tie-point (only for non-UNVERIFIED components)
     for comp in processed_components:
+        if comp.get("status") == "UNVERIFIED":
+            continue
         cid = comp["id"]
         for term in comp.get("terminals", []):
             h = term.get("hole")
@@ -567,12 +589,12 @@ def map_photo_to_circuit(
 
     # Merge nodes for jumper wires
     for comp in processed_components:
-        if comp.get("type") == "wire" and len(comp.get("terminals", [])) >= 2:
+        if comp.get("status") != "UNVERIFIED" and comp.get("type") == "wire" and len(comp.get("terminals", [])) >= 2:
             t1 = comp["terminals"][0]
             t2 = comp["terminals"][1]
             h1 = t1.get("hole")
             h2 = t2.get("hole")
-            if h1 and h2:
+            if h1 and h2 and t1.get("status") == "VERIFIED" and t2.get("status") == "VERIFIED":
                 n1 = get_canonical_node_for_hole(h1)
                 n2 = get_canonical_node_for_hole(h2)
                 dsu.union(n1, n2)
@@ -597,10 +619,12 @@ def map_photo_to_circuit(
 
     for comp in processed_components:
         cid = comp["id"]
+        is_unverified_comp = comp.get("status") == "UNVERIFIED"
         for term in comp.get("terminals", []):
             h = term.get("hole")
             t_name = term.get("terminal")
-            if h:
+            t_pin = term.get("pin", 1)
+            if h and not is_unverified_comp:
                 base_node = get_canonical_node_for_hole(h)
                 root = dsu.find(base_node)
                 clean_nid = root_to_clean_id.get(root, f"NODE_{root}")
@@ -612,6 +636,7 @@ def map_photo_to_circuit(
                 connections.append({
                     "component_id": cid,
                     "terminal": t_name,
+                    "pin": t_pin,
                     "node_id": clean_nid,
                     "hole": h
                 })
@@ -627,7 +652,9 @@ def map_photo_to_circuit(
         })
 
     # 5. Determine Pipeline Status & Simulation Readiness
-    # States: READY, PARTIAL, AMBIGUOUS, BLOCKED
+    # States: READY, PARTIAL, AMBIGUOUS, BLOCKED, UNVERIFIED
+    has_unverified_components = any(c.get("status") == "UNVERIFIED" for c in processed_components)
+
     if has_ambiguous_terminals:
         pipeline_status = "AMBIGUOUS"
         sim_ready = False
@@ -636,6 +663,10 @@ def map_photo_to_circuit(
         pipeline_status = "PARTIAL"
         sim_ready = False
         sim_reason = "UNSUPPORTED_OR_UNKNOWN_COMPONENTS"
+    elif has_unverified_components:
+        pipeline_status = "UNVERIFIED"
+        sim_ready = False
+        sim_reason = "CIRCUIT_CONNECTIONS_NOT_VERIFIED"
     elif has_verified_components and all(c["status"] == "VERIFIED" for c in processed_components):
         pipeline_status = "READY"
         # Simulation is gated until manual power supply configuration (Phase 24.2)
@@ -657,11 +688,28 @@ def map_photo_to_circuit(
         nodes=nodes_list
     )
 
+    # Build canonical netlist object
+    netlist_obj = {
+        "circuit_id": f"circ_{circuit_sig}",
+        "source": "real",
+        "metadata": {
+            "status": pipeline_status,
+            "signature": circuit_sig,
+            "created_at": ""
+        },
+        "components": processed_components,
+        "nodes": nodes_list,
+        "connections": connections,
+        "wires": [c for c in processed_components if c.get("type") == "wire"],
+        "topology_verified": (pipeline_status == "READY")
+    }
+
     return {
         "status": pipeline_status,
         "components": processed_components,
         "connections": connections,
         "nodes": nodes_list,
+        "netlist": netlist_obj,
         "breadboard": breadboard_info,
         "diagnostics": diagnostics,
         "circuit_signature": circuit_sig,
