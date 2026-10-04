@@ -1,6 +1,26 @@
-import { API_BASE_URL, FRONTEND_BASE_URL, WS_BASE_URL } from '../config/api.js';
+import {
+  API_BASE_URL,
+  FRONTEND_BASE_URL,
+  WS_BASE_URL,
+  getMobileScannerUrl,
+  isLocalHost,
+  isLanIp,
+  isProduction,
+  resolveApiBaseUrl,
+  resolveFrontendBaseUrl
+} from '../config/api.js';
 
-export { API_BASE_URL, FRONTEND_BASE_URL, WS_BASE_URL };
+export {
+  API_BASE_URL,
+  FRONTEND_BASE_URL,
+  WS_BASE_URL,
+  getMobileScannerUrl,
+  isLocalHost,
+  isLanIp,
+  isProduction,
+  resolveApiBaseUrl,
+  resolveFrontendBaseUrl
+};
 
 export async function apiRequest(endpoint, method = 'GET', body = null) {
   try {

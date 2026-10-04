@@ -36,16 +36,23 @@ app = FastAPI(
     description="Full API contract with MNA Electrical Solver & Transient Simulation Engine"
 )
 
-# Configurable CORS allowed origins
-allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "*")
-if allowed_origins_env.strip() == "*":
-    origins = ["*"]
-else:
+# Configurable CORS allowed origins (Vercel, LAN, and Local Dev)
+allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "").strip()
+if allowed_origins_env and allowed_origins_env != "*":
     origins = [orig.strip() for orig in allowed_origins_env.split(",") if orig.strip()]
+else:
+    origins = [
+        "https://smartbreadboard-3d.vercel.app",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?|https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -967,20 +974,44 @@ class SinglePhotoPayload(BaseModel):
     photo: str  # single validated base64 data url
     valid: bool = True
 
+@app.post("/api/scanner/session/{session_id}/init")
+@app.post("/api/scanner/session/{session_id}/create")
+def scanner_session_init(session_id: str):
+    """Initializes or registers a desktop single-photo scanner session."""
+    import time
+    single_photo_sessions[session_id] = {
+        "session_id": session_id,
+        "phone_connected": False,
+        "photo": None,
+        "valid": False,
+        "status": "waiting",
+        "created_at": time.time(),
+        "updated_at": time.time()
+    }
+    return {
+        "success": True,
+        "session_id": session_id,
+        "status": "waiting"
+    }
+
 @app.post("/api/scanner/session/{session_id}/connect")
 async def scanner_session_connect(session_id: str):
     """Signals that a phone has connected to the single-photo scanner session."""
+    import time
     if session_id not in single_photo_sessions:
         single_photo_sessions[session_id] = {
             "session_id": session_id,
             "phone_connected": True,
             "photo": None,
             "valid": False,
-            "status": "connected"
+            "status": "connected",
+            "created_at": time.time(),
+            "updated_at": time.time()
         }
     else:
         single_photo_sessions[session_id]["phone_connected"] = True
         single_photo_sessions[session_id]["status"] = "connected"
+        single_photo_sessions[session_id]["updated_at"] = time.time()
 
     # Relay peer_status to desktop via websocket if active
     if session_id in session_manager.active_sessions and "laptop" in session_manager.active_sessions[session_id]:
@@ -994,25 +1025,42 @@ async def scanner_session_connect(session_id: str):
 
 @app.get("/api/scanner/session/{session_id}")
 def get_scanner_session(session_id: str):
-    """Returns current state of single-photo scanner session."""
-    return single_photo_sessions.get(session_id, {
-        "session_id": session_id,
-        "phone_connected": False,
-        "photo": None,
-        "valid": False,
-        "status": "waiting"
-    })
+    """Returns current state of single-photo scanner session or 404 if not found/expired."""
+    import time
+    sess = single_photo_sessions.get(session_id)
+    if not sess:
+        raise HTTPException(status_code=404, detail="SESSION NOT FOUND")
+    
+    # Session expiration (2 hours)
+    if time.time() - sess.get("created_at", time.time()) > 7200:
+        single_photo_sessions.pop(session_id, None)
+        raise HTTPException(status_code=404, detail="SESSION EXPIRED")
+
+    return sess
 
 @app.post("/api/scanner/session/{session_id}/photo")
 async def upload_scanner_single_photo(session_id: str, payload: SinglePhotoPayload):
     """Receives exactly ONE validated circuit photo sent from mobile phone."""
-    single_photo_sessions[session_id] = {
-        "session_id": session_id,
-        "phone_connected": True,
-        "photo": payload.photo,
-        "valid": payload.valid,
-        "status": "photo_received"
-    }
+    import time
+    now = time.time()
+    if session_id not in single_photo_sessions:
+        single_photo_sessions[session_id] = {
+            "session_id": session_id,
+            "phone_connected": True,
+            "photo": payload.photo,
+            "valid": payload.valid,
+            "status": "photo_received",
+            "created_at": now,
+            "updated_at": now
+        }
+    else:
+        single_photo_sessions[session_id].update({
+            "phone_connected": True,
+            "photo": payload.photo,
+            "valid": payload.valid,
+            "status": "photo_received",
+            "updated_at": now
+        })
 
     # Relay to laptop via websocket if connected
     if session_id in session_manager.active_sessions and "laptop" in session_manager.active_sessions[session_id]:

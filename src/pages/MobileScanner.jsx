@@ -27,11 +27,14 @@ export default function MobileScanner() {
   const sessionId = searchParams.get('session') || 'DEMO_SESSION';
 
   const [isConnected, setIsConnected] = useState(false);
+  const [sessionNotFound, setSessionNotFound] = useState(false);
+  const [backendDisconnected, setBackendDisconnected] = useState(false);
   const [capturedPhoto, setCapturedPhoto] = useState(null);
   const [validationResult, setValidationResult] = useState(null);
   const [isValidating, setIsValidating] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSent, setIsSent] = useState(false);
+  const [sendError, setSendError] = useState(null);
   const [cameraError, setCameraError] = useState(null);
 
   const videoRef = useRef(null);
@@ -40,18 +43,40 @@ export default function MobileScanner() {
 
   // 1. Establish connection to Desktop Session via WebSocket + HTTP
   useEffect(() => {
-    // Notify session endpoint
-    fetch(`${API_BASE_URL}/api/scanner/session/${sessionId}/connect`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    }).then(r => r.json()).then(data => {
-      if (data && data.success) {
-        setIsConnected(true);
+    let isMounted = true;
+
+    const connectToSession = async () => {
+      try {
+        const resp = await fetch(`${API_BASE_URL}/api/scanner/session/${sessionId}/connect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (!isMounted) return;
+
+        if (resp.status === 404) {
+          setSessionNotFound(true);
+          return;
+        }
+
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data && data.success) {
+            setIsConnected(true);
+            setBackendDisconnected(false);
+            setSessionNotFound(false);
+          }
+        } else {
+          setBackendDisconnected(true);
+        }
+      } catch (err) {
+        if (!isMounted) return;
+        console.warn("Could not connect to session endpoint:", err);
+        setBackendDisconnected(true);
       }
-    }).catch(e => {
-      console.warn("Could not post session connect:", e);
-      setIsConnected(true); // Optimistic local fallback
-    });
+    };
+
+    connectToSession();
 
     // Connect WebSocket
     try {
@@ -162,6 +187,7 @@ export default function MobileScanner() {
   const handleSendToDesktop = async () => {
     if (!capturedPhoto || !validationResult?.valid) return;
     setIsSending(true);
+    setSendError(null);
 
     const payload = {
       sessionId,
@@ -169,32 +195,50 @@ export default function MobileScanner() {
       valid: true
     };
 
-    try {
-      // 1. Send via WebSocket if open
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    let wsSent = false;
+    let httpSent = false;
+
+    // 1. Send via WebSocket if open
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
         wsRef.current.send(JSON.stringify({
           type: 'photo_received',
           photo: capturedPhoto,
           valid: true
         }));
+        wsSent = true;
+      } catch (e) {
+        console.warn("WebSocket send error:", e);
       }
+    }
 
-      // 2. Send via HTTP POST
+    // 2. Send via HTTP POST to FastAPI backend
+    try {
       const resp = await fetch(`${API_BASE_URL}/api/scanner/session/${sessionId}/photo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 
+      if (resp.status === 404) {
+        setSessionNotFound(true);
+        throw new Error("SESSION NOT FOUND: Session expired or invalid.");
+      }
+
       if (!resp.ok) {
         throw new Error(`Failed to transmit photo (HTTP ${resp.status})`);
       }
 
+      httpSent = true;
       setIsSent(true);
     } catch (e) {
-      console.warn("Direct upload error, falling back:", e);
-      // Treat as sent if local transmission succeeded
-      setIsSent(true);
+      console.warn("Direct upload error:", e);
+      if (wsSent) {
+        // WebSocket succeeded even if HTTP had a hiccup
+        setIsSent(true);
+      } else {
+        setSendError(e.message || "Failed to transmit photo to backend.");
+      }
     } finally {
       setIsSending(false);
     }
@@ -205,6 +249,7 @@ export default function MobileScanner() {
     setCapturedPhoto(null);
     setValidationResult(null);
     setIsSent(false);
+    setSendError(null);
     startCamera();
   };
 
@@ -230,15 +275,111 @@ export default function MobileScanner() {
         </div>
 
         {/* Connection status badge */}
-        <div style={{ marginTop: '0.45rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', fontWeight: 700, padding: '0.2rem 0.65rem', borderRadius: '12px', background: isConnected ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)', color: isConnected ? '#4ade80' : '#facc15', border: isConnected ? '1px solid #22c55e' : '1px solid #eab308' }}>
-          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: isConnected ? '#4ade80' : '#facc15' }} />
-          <span>{isConnected ? '● Connected to Desktop' : '● Connecting to Desktop...'}</span>
+        <div style={{
+          marginTop: '0.45rem',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.35rem',
+          fontSize: '0.75rem',
+          fontWeight: 700,
+          padding: '0.2rem 0.65rem',
+          borderRadius: '12px',
+          background: sessionNotFound
+            ? 'rgba(239, 68, 68, 0.15)'
+            : backendDisconnected
+              ? 'rgba(239, 68, 68, 0.15)'
+              : isConnected
+                ? 'rgba(34, 197, 94, 0.15)'
+                : 'rgba(234, 179, 8, 0.15)',
+          color: sessionNotFound
+            ? '#ef4444'
+            : backendDisconnected
+              ? '#ef4444'
+              : isConnected
+                ? '#4ade80'
+                : '#facc15',
+          border: sessionNotFound
+            ? '1px solid #ef4444'
+            : backendDisconnected
+              ? '1px solid #ef4444'
+              : isConnected
+                ? '1px solid #22c55e'
+                : '1px solid #eab308'
+        }}>
+          <span style={{
+            width: '6px',
+            height: '6px',
+            borderRadius: '50%',
+            background: (sessionNotFound || backendDisconnected) ? '#ef4444' : isConnected ? '#4ade80' : '#facc15'
+          }} />
+          <span>
+            {sessionNotFound
+              ? 'SESSION NOT FOUND'
+              : backendDisconnected
+                ? 'BACKEND DISCONNECTED'
+                : isConnected
+                  ? 'Connected to Desktop'
+                  : 'Connecting to Desktop...'}
+          </span>
         </div>
       </div>
 
       {/* Main Content Viewport */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        {cameraError ? (
+        {sessionNotFound ? (
+          <div style={{
+            padding: '1.5rem',
+            borderRadius: '12px',
+            background: 'rgba(239, 68, 68, 0.12)',
+            border: '1px solid #ef4444',
+            color: '#fca5a5',
+            textAlign: 'center',
+            margin: '2rem 0'
+          }}>
+            <AlertTriangle size={36} style={{ margin: '0 auto 0.75rem', color: '#ef4444' }} />
+            <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: '0 0 0.5rem 0', color: '#ef4444' }}>
+              SESSION NOT FOUND
+            </h2>
+            <p style={{ fontSize: '0.85rem', color: '#cbd5e1', lineHeight: 1.5, margin: '0 0 1rem 0' }}>
+              Scanner session <code style={{ color: '#fca5a5' }}>{sessionId}</code> has expired or does not exist on the server.
+            </p>
+            <p style={{ fontSize: '0.82rem', color: '#94a3b8', margin: 0 }}>
+              Please scan the active QR code currently displayed on your computer screen.
+            </p>
+          </div>
+        ) : backendDisconnected ? (
+          <div style={{
+            padding: '1.25rem',
+            borderRadius: '12px',
+            background: 'rgba(239, 68, 68, 0.12)',
+            border: '1px solid #ef4444',
+            color: '#fca5a5',
+            textAlign: 'center',
+            margin: '1.5rem 0'
+          }}>
+            <AlertTriangle size={32} style={{ margin: '0 auto 0.5rem', color: '#ef4444' }} />
+            <h2 style={{ fontSize: '1rem', fontWeight: 800, margin: '0 0 0.4rem 0', color: '#ef4444' }}>
+              BACKEND DISCONNECTED
+            </h2>
+            <p style={{ fontSize: '0.82rem', color: '#cbd5e1', margin: '0 0 0.8rem 0' }}>
+              Cannot reach the FastAPI backend at <code style={{ color: '#fca5a5' }}>{API_BASE_URL}</code>.
+            </p>
+            <button
+              onClick={() => window.location.reload()}
+              style={{
+                padding: '0.45rem 1rem',
+                borderRadius: '8px',
+                background: '#ef4444',
+                color: '#fff',
+                border: 'none',
+                fontWeight: 700,
+                cursor: 'pointer'
+              }}
+            >
+              Retry Connection
+            </button>
+          </div>
+        ) : cameraError ? (
           <div style={{ padding: '1rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid #ef4444', color: '#fca5a5', fontSize: '0.85rem', textAlign: 'center', marginBottom: '1rem' }}>
             <AlertTriangle size={24} style={{ margin: '0 auto 0.5rem', display: 'block' }} />
             {cameraError}
@@ -409,6 +550,12 @@ export default function MobileScanner() {
                     [ RETAKE ]
                   </button>
                 </div>
+
+                {sendError && (
+                  <div style={{ color: '#fca5a5', fontSize: '0.78rem', marginTop: '0.5rem', textAlign: 'center' }}>
+                    ⚠ {sendError}
+                  </div>
+                )}
               </div>
             ) : (
               /* Section 4: Invalid Photo Card */

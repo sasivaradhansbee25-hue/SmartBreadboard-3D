@@ -6,7 +6,7 @@ import { mockCircuits } from '../data/mockCircuits';
 import { useCircuit } from '../context/CircuitContext';
 import Breadboard3DCanvas from '../components/Breadboard3DCanvas';
 import PhotoCircuitMapper from '../components/PhotoCircuitMapper';
-import { API_BASE_URL, WS_BASE_URL } from '../services/api.js';
+import { API_BASE_URL, WS_BASE_URL, getMobileScannerUrl } from '../services/api.js';
 import { validateCircuitImage } from '../services/scannerImageValidator.js';
 
 const CLASS_COLOR_BADGES = {
@@ -55,68 +55,151 @@ export default function Scanner() {
   const [circuitNotDetectedError, setCircuitNotDetectedError] = useState(null);
 
   // Phone QR Entry & Single-Photo Transmission Session
-  const [sessionId] = useState(() => Math.random().toString(36).substring(2, 8).toUpperCase());
+  const [sessionId, setSessionId] = useState(() => Math.random().toString(36).substring(2, 8).toUpperCase());
   const [lanIp, setLanIp] = useState(null);
   const [phoneConnected, setPhoneConnected] = useState(false);
   const [phonePhotoReceived, setPhonePhotoReceived] = useState(false);
+  const [backendStatus, setBackendStatus] = useState('connecting'); // 'connecting' | 'connected' | 'disconnected'
+  const [sessionNotFound, setSessionNotFound] = useState(false);
+  const [pollingActive, setPollingActive] = useState(true);
+
+  const handleGenerateNewSession = () => {
+    const newId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    setSessionId(newId);
+    setPhoneConnected(false);
+    setPhonePhotoReceived(false);
+    setSessionNotFound(false);
+    setBackendStatus('connecting');
+    setPollingActive(true);
+  };
+
+  const handleRetryBackend = () => {
+    setBackendStatus('connecting');
+    setSessionNotFound(false);
+    setPollingActive(true);
+  };
 
   useEffect(() => {
-    // 1. Fetch LAN IP for mobile QR code generation
+    let isMounted = true;
+
+    // 1. Fetch LAN IP for mobile QR code generation (in local/LAN dev)
     fetch(`${API_BASE_URL}/api/lan-ip`)
       .then(res => res.json())
       .then(data => {
-        if (data && data.lan_ip) {
+        if (isMounted && data && data.lan_ip) {
           setLanIp(data.lan_ip);
         }
       })
       .catch(e => {
-        console.warn("Could not fetch LAN IP, falling back to window.location.hostname:", e);
+        console.warn("Could not fetch LAN IP:", e);
       });
 
-    // 2. Connect WebSocket to receive single phone photo transmission
+    // 2. Initialize / register the session on backend
+    fetch(`${API_BASE_URL}/api/scanner/session/${sessionId}/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    })
+      .then(res => {
+        if (!isMounted) return;
+        if (res.ok) {
+          setBackendStatus('connected');
+        } else {
+          console.warn("Session init returned status:", res.status);
+          setBackendStatus('disconnected');
+        }
+      })
+      .catch(err => {
+        if (!isMounted) return;
+        console.warn("Backend session init unreachable:", err);
+        setBackendStatus('disconnected');
+      });
+
+    // 3. Connect WebSocket to receive single phone photo transmission
     let ws = null;
     try {
       ws = new WebSocket(`${WS_BASE_URL}/ws/camera/${sessionId}?role=laptop`);
+      ws.onopen = () => {
+        if (isMounted) setBackendStatus('connected');
+      };
       ws.onmessage = (event) => {
+        if (!isMounted) return;
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'peer_status' && (msg.peer === 'phone' || msg.status === 'connected')) {
             setPhoneConnected(true);
           } else if (msg.type === 'photo_received' && msg.photo) {
             handleReceivedPhonePhoto(msg.photo, msg.valid);
+            setPollingActive(false);
           }
         } catch (err) {
           console.warn("Error parsing ws message:", err);
         }
       };
-      ws.onerror = (e) => console.warn("Scanner WebSocket warning:", e);
+      ws.onerror = (e) => {
+        // Fallback polling will handle checking status
+      };
     } catch (e) {
       console.warn("WebSocket init error:", e);
     }
 
-    // 3. Periodic polling fallback every 1.5s
+    // 4. Polling fallback every 1.5s
+    let consecutiveErrors = 0;
     const interval = setInterval(async () => {
+      if (!isMounted || !pollingActive || phonePhotoReceived) {
+        clearInterval(interval);
+        return;
+      }
       try {
         const resp = await fetch(`${API_BASE_URL}/api/scanner/session/${sessionId}`);
-        if (resp.ok) {
-          const sessData = await resp.json();
-          if (sessData.phone_connected) {
-            setPhoneConnected(true);
+        if (!isMounted) return;
+
+        if (resp.status === 404) {
+          // Session does not exist or expired! Stop polling immediately.
+          setSessionNotFound(true);
+          setPollingActive(false);
+          clearInterval(interval);
+          return;
+        }
+
+        if (!resp.ok) {
+          consecutiveErrors++;
+          if (consecutiveErrors >= 3) {
+            setBackendStatus('disconnected');
+            setPollingActive(false);
+            clearInterval(interval);
           }
-          if (sessData.status === 'photo_received' && sessData.photo) {
-            handleReceivedPhonePhoto(sessData.photo, sessData.valid);
-          }
+          return;
+        }
+
+        // Response is OK
+        consecutiveErrors = 0;
+        setBackendStatus('connected');
+        const sessData = await resp.json();
+        if (sessData.phone_connected) {
+          setPhoneConnected(true);
+        }
+        if (sessData.status === 'photo_received' && sessData.photo) {
+          handleReceivedPhonePhoto(sessData.photo, sessData.valid);
+          setPollingActive(false);
+          clearInterval(interval);
         }
       } catch (err) {
-        // quiet polling error
+        if (!isMounted) return;
+        consecutiveErrors++;
+        if (consecutiveErrors >= 3) {
+          setBackendStatus('disconnected');
+          setPollingActive(false);
+          clearInterval(interval);
+        }
       }
     }, 1500);
 
     return () => {
+      isMounted = false;
       clearInterval(interval);
       if (ws) ws.close();
     };
-  }, [sessionId]);
+  }, [sessionId, pollingActive]);
 
   const handleReceivedPhonePhoto = (photoData, isValid = true) => {
     setPhonePhotoReceived(true);
@@ -309,9 +392,7 @@ export default function Scanner() {
   const totalDetections = detections.length;
   const isRealActive = activeCircuit?.source === 'real';
 
-  const host = lanIp || window.location.hostname;
-  const port = window.location.port ? `:${window.location.port}` : '';
-  const mobileScannerUrl = `${window.location.protocol}//${host}${port}/scanner-mobile?session=${sessionId}`;
+  const { url: mobileScannerUrl, error: qrUrlError } = getMobileScannerUrl(sessionId, lanIp);
 
   return (
     <div style={{ paddingBottom: '2.5rem' }}>
@@ -348,7 +429,13 @@ export default function Scanner() {
         marginBottom: '1.5rem',
         padding: '1.25rem 1.5rem',
         background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.6) 0%, rgba(15, 23, 42, 0.85) 100%)',
-        border: phonePhotoReceived ? '1px solid #10b981' : phoneConnected ? '1px solid #38bdf8' : '1px solid #334155',
+        border: phonePhotoReceived
+          ? '1px solid #10b981'
+          : sessionNotFound || backendStatus === 'disconnected'
+            ? '1px solid #ef4444'
+            : phoneConnected
+              ? '1px solid #38bdf8'
+              : '1px solid #334155',
         borderRadius: '12px'
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -360,7 +447,39 @@ export default function Scanner() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            {phonePhotoReceived ? (
+            {sessionNotFound ? (
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                padding: '0.25rem 0.65rem',
+                borderRadius: '999px',
+                background: 'rgba(239, 68, 68, 0.15)',
+                color: '#ef4444',
+                border: '1px solid #ef4444'
+              }}>
+                <AlertTriangle size={13} />
+                SESSION NOT FOUND
+              </span>
+            ) : backendStatus === 'disconnected' ? (
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                padding: '0.25rem 0.65rem',
+                borderRadius: '999px',
+                background: 'rgba(239, 68, 68, 0.15)',
+                color: '#ef4444',
+                border: '1px solid #ef4444'
+              }}>
+                <AlertTriangle size={13} />
+                BACKEND DISCONNECTED
+              </span>
+            ) : phonePhotoReceived ? (
               <span style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -374,7 +493,7 @@ export default function Scanner() {
                 border: '1px solid #10b981'
               }}>
                 <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981' }} />
-                📱 PHONE CONNECTED
+                PHOTO RECEIVED
               </span>
             ) : phoneConnected ? (
               <span style={{
@@ -390,7 +509,7 @@ export default function Scanner() {
                 border: '1px solid #38bdf8'
               }}>
                 <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#38bdf8' }} />
-                ● Phone Connected
+                PHONE CONNECTED
               </span>
             ) : (
               <span style={{
@@ -406,7 +525,7 @@ export default function Scanner() {
                 border: '1px solid #475569'
               }}>
                 <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#94a3b8' }} />
-                ○ Waiting for Phone
+                WAITING FOR PHONE
               </span>
             )}
             <span style={{ fontSize: '0.72rem', color: '#64748b', fontFamily: 'monospace' }}>
@@ -415,27 +534,80 @@ export default function Scanner() {
           </div>
         </div>
 
-        {!phonePhotoReceived ? (
+        {sessionNotFound ? (
+          /* Error State: Session Not Found (404) */
+          <div style={{ padding: '1.25rem', background: 'rgba(239, 68, 68, 0.08)', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+            <div style={{ color: '#fca5a5', fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <AlertTriangle size={18} /> SESSION NOT FOUND
+            </div>
+            <div style={{ color: '#cbd5e1', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+              Scanner session <code style={{ color: '#fca5a5', fontWeight: 'bold' }}>{sessionId}</code> has expired or does not exist on the backend. Polling has been stopped to prevent repetitive errors.
+            </div>
+            <button
+              onClick={handleGenerateNewSession}
+              className="btn btn-primary"
+              style={{ padding: '0.45rem 1.1rem', fontSize: '0.84rem' }}
+            >
+              <RotateCcw size={14} /> Generate New QR Session
+            </button>
+          </div>
+        ) : backendStatus === 'disconnected' ? (
+          /* Error State: Backend Disconnected */
+          <div style={{ padding: '1.25rem', background: 'rgba(239, 68, 68, 0.08)', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+            <div style={{ color: '#fca5a5', fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <AlertTriangle size={18} /> BACKEND DISCONNECTED
+            </div>
+            <div style={{ color: '#cbd5e1', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+              FastAPI backend is unreachable at <code style={{ color: '#fca5a5' }}>{API_BASE_URL}</code>. Polling has been paused. Please verify that the backend is running.
+            </div>
+            <button
+              onClick={handleRetryBackend}
+              className="btn btn-primary"
+              style={{ padding: '0.45rem 1.1rem', fontSize: '0.84rem' }}
+            >
+              <RotateCcw size={14} /> Retry Connection
+            </button>
+          </div>
+        ) : !phonePhotoReceived ? (
           /* Waiting for mobile capture */
           <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <div style={{
-              background: '#ffffff',
-              padding: '0.65rem',
-              borderRadius: '8px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 14px rgba(0,0,0,0.3)'
-            }}>
-              <QRCodeSVG
-                value={mobileScannerUrl}
-                size={135}
-                level="M"
-                includeMargin={false}
-                bgColor="#ffffff"
-                fgColor="#0f172a"
-              />
-            </div>
+            {mobileScannerUrl ? (
+              <div style={{
+                background: '#ffffff',
+                padding: '0.65rem',
+                borderRadius: '8px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 4px 14px rgba(0,0,0,0.3)'
+              }}>
+                <QRCodeSVG
+                  value={mobileScannerUrl}
+                  size={135}
+                  level="M"
+                  includeMargin={false}
+                  bgColor="#ffffff"
+                  fgColor="#0f172a"
+                />
+              </div>
+            ) : (
+              <div style={{
+                width: '135px',
+                height: '135px',
+                background: 'rgba(15, 23, 42, 0.6)',
+                border: '1px dashed #475569',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#94a3b8',
+                fontSize: '0.75rem',
+                textAlign: 'center',
+                padding: '0.5rem'
+              }}>
+                {qrUrlError || 'Generating QR...'}
+              </div>
+            )}
 
             <div style={{ flex: 1, minWidth: '240px' }}>
               <div style={{ fontSize: '0.92rem', color: '#e2e8f0', fontWeight: 600, marginBottom: '0.35rem' }}>
@@ -445,10 +617,12 @@ export default function Scanner() {
                 Position your phone directly above the circuit to capture one clear, top-angle photo.
                 Your phone will validate the image and instantly send it to this desktop scanner.
               </p>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.75rem', color: '#38bdf8' }}>
-                <Smartphone size={14} />
-                <span>URL: <code style={{ color: '#bae6fd', background: 'rgba(56, 189, 248, 0.1)', padding: '0.15rem 0.4rem', borderRadius: '4px' }}>{mobileScannerUrl}</code></span>
-              </div>
+              {mobileScannerUrl && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.75rem', color: '#38bdf8' }}>
+                  <Smartphone size={14} />
+                  <span>Reachable URL: <code style={{ color: '#bae6fd', background: 'rgba(56, 189, 248, 0.1)', padding: '0.15rem 0.4rem', borderRadius: '4px' }}>{mobileScannerUrl}</code></span>
+                </div>
+              )}
             </div>
           </div>
         ) : (
@@ -502,6 +676,7 @@ export default function Scanner() {
                       setAcceptedCircuitImage(null);
                       setUploadedImage(null);
                       setValidationResult(null);
+                      setPollingActive(true);
                     }}
                     className="btn btn-secondary"
                     style={{ padding: '0.5rem 0.85rem', fontSize: '0.82rem' }}
