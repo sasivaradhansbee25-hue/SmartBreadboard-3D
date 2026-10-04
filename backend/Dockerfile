@@ -23,7 +23,7 @@ WORKDIR /app
 # ------------------------------------------------------------
 # Python dependencies
 # ------------------------------------------------------------
-COPY backend/requirements.txt ./requirements.txt
+COPY requirements.txt ./requirements.txt
 
 RUN pip install --no-cache-dir --upgrade pip
 
@@ -39,12 +39,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # ------------------------------------------------------------
 # Copy backend source code
 # ------------------------------------------------------------
-COPY backend/ .
+COPY . .
 
 # ------------------------------------------------------------
 # Runtime environment
 # ------------------------------------------------------------
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 ENV ALLOWED_ORIGINS="*"
 
 # Render supplies PORT at runtime.
